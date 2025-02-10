@@ -1,8 +1,8 @@
-function [GroupStatsGA, GroupStatsCE, demograph, stimulus] ...
-    = fNIRS_Process(load_path, nirstoolbox_path, user_vars,save_snirf_flag)
+function [GroupStats, demograph, stimulus] ...
+    = fNIRS_Process(load_path, nirstoolbox_path, user_vars)
 % Data loading ____________________________________________________________
 %-- Adding nirs-toolbox to path
-addpath(genpath(fullfile(nirstoolbox_path,'nirs-toolbox')))
+addpath(genpath(nirstoolbox_path))
 %-- Adding default user variables if not present
 if ~isa(user_vars,'struct')
     user_vars = struct();
@@ -11,6 +11,14 @@ if ~isa(user_vars,'struct')
     user_vars.stim_names={'nback0a','nback1a','nback0b','nback2a'};
     user_vars.stim_onset=NaN;
     user_vars.stim_dur = 72;
+    user_vars.max_short_distance = 10;
+    user_vars.max_regul_distance = 50;
+    user_vars.regression_formula = ...
+        {'beta ~ -1 + group + (1|subject)', ...
+         'beta ~ -1  + group:cond + (1|subject)'};
+    user_vars.save_as_snirf_flag = false;
+    user_vars.overwrite_as_snirf = false;
+    user_vars.calculate_total_hb = false;
 end
 %-- Solo or directory data loading ( data_raws.probe.draw )
 if ~isempty(dir(fullfile(load_path, '*.wl1')))
@@ -36,10 +44,10 @@ job.listOfChanges = cat(2, nirs.getStimNames(data_raws(1)), ...
 % Identify short channels and exclude faux channels _______________________
 %-- Short channel identification
 job = nirs.modules.LabelShortSeperation (job);
-job.max_distance = 10;
+job.max_distance = user_vars.max_short_distance;
 %-- Long channel identification and removal
 job = nirs.modules.LabeltooLongDistance (job);
-job.min_distance = 50;
+job.min_distance = user_vars.max_regul_distance;
 job = nirs.modules.RemovetooLongDistance(job);
 % _________________________________________________________________________
 
@@ -47,6 +55,13 @@ job = nirs.modules.RemovetooLongDistance(job);
 job = nirs.modules.OpticalDensity       (job);
 job = nirs.modules.BeerLambertLaw       (job);
 data_prps = job.run(data_raws);
+% Calculate total hemoglobin - INDEV
+if user_vars.calculate_total_hb
+    temp = data_prps.data;
+    for row=1:2:size(temp,2)
+        data_prps.data(:,row) = temp(:,row) + temp(:,row+1);
+    end
+end
 % _________________________________________________________________________
 
 % Motion correction (Auto-regressive Iteratively Reweighted Least Squares)_
@@ -68,93 +83,63 @@ stimulus  = nirs.createStimulusTable(data_prps);
 % _________________________________________________________________________
 
 % Statistical analysis (Mixed Effects Model, Wilkinson notation) __________
-job = nirs.modules.MixedEffects;
-% Group analysis
-job.formula = 'beta ~ -1 + group + (1|subject)';
-GroupStatsGA = job.run(data_stat);
-disp(GroupStatsGA.conditions);
-% Group condition analysis
-job.formula='beta ~ -1  + group:cond + (1|subject)';
-GroupStatsCE=job.run(data_stat);
-disp(GroupStatsCE.conditions);
-%% Individual analysis
-% job.formula='beta ~ -1  + group:cond';
-% for i=1:length(SubjStats)
-%     IndieStatsCE = job.run(SubjStats(i));
-%     disp(IndieStatsCE.conditions);
-%     c = [-1  0  0  1];
-%     ContrastStatsCE = IndieStatsCE.ttest(c);
-% 
-%     ContrastStatsCE.probe=ContrastStatsCE.probe.SetFiducialsVisibility(false);
-%     ContrastStatsCE.probe.defaultdrawfcn='10-20 map';
-%     ContrastStatsCE.probe.optodes_registered = optode_map;
-%     ContrastStatsCE.draw('tstat',[-8 8], 'p<0.05');
-% 
-%     compfig = figure;
-%     a = findobj('Type','axes');
-%     horz = floor(length(a)/2);
-%     vert = 2;
-%     fig_size = 0.25;
-%     for p=1:length(a)
-%         pos = [fig_size * (p-1), 1 - fig_size * (p-1),...
-%                fig_size,         fig_size            ];
-%         ax(p) = copyobj(a(p), compfig);
-%         set(ax(p), 'Position', pos)
-%     end
-% 
-% ContrastStatsCE.printAll('tstat',[-8 8], 'q<0.05', [save_figs,'1/'], 'fig');
-% end
-% fileList = dir(fullfile(save_figs,'**','*.fig'));
-% for q=1:8
-%     subplot(2,4,q)
-%     img = imread(fullfile(fileList(q).folder,fileList(q).name));
-%     imshow(img)
-% end
-
-% _________________________________________________________________________
-
-% Save preprocessed data as .snirf ________________________________________
-if save_snirf_flag == true
-    for i=1:length(data_prps)
-        visitID = '';
-        if ismember('Visit',demograph.Properties.VariableNames)
-            visitID = strcat('_V',demograph.Visit(i));
-        end
-        save_name = fullfile(load_path,[demograph.Name{i},visitID{:},...
-                                '.snirf']);
-        if isfile(save_name)
-            validate =input('File already exists. Overwrite? [[y]/n]',"s");
-            if isequal(lower(validate),'y') | isempty(validate)
-                delete(save_name)
-                nirs.io.saveSNIRF(data_prps(i,1),save_name)
-                disp(['Saved ',save_name,'.']);
-            else
-                disp(['Discarded ',demograph.Name{i},'.snirf.']);
-            end
-        else
-            nirs.io.saveSNIRF(data_prps(i,1),save_name)
-            disp(['[',num2str(i),']',' Saved ',save_name,'.']);
-        end
-    end
+job = nirs.modules.MixedEffects();
+for iter = 1:length(user_vars.regression_formula)
+    job.formula = user_vars.regression_formula{iter};
+    GroupStats(iter) = job.run(data_stat);
+    disp(['Conditions for formula: ', user_vars.regression_formula{iter}])
+    disp(GroupStats(iter).conditions)
 end
 % _________________________________________________________________________
 
+% Save preprocessed data as .snirf ________________________________________
+if user_vars.save_as_snirf_flag == true
+    saveAsSNIRF(data_prps, demograph, load_path, ...
+        user_vars.overwrite_as_snirf)
+end
+disp('Finished processing data.')
+% _________________________________________________________________________
+
 % Auxillary functions _____________________________________________________
+function saveAsSNIRF(data, demo, load_path, overwrite)
+    for i=1:length(data)
+    visitID = '';
+    if ismember('Visit',demo.Properties.VariableNames)
+        visitID = strcat('_V',demo.Visit(i));
+    end
+    save_name = fullfile(load_path,[demo.Name{i},visitID{:},...
+                            '.snirf']);
+    if isfile(save_name) && ~overwrite
+        validate =input('File already exists. Overwrite? [[y]/n]',"s");
+        if isequal(lower(validate),'y') | isempty(validate)
+            delete(save_name)
+            nirs.io.saveSNIRF(data(i,1),save_name)
+            disp(['Saved ',save_name,'.']);
+        else
+            disp(['Discarded ',demo.Name{i},'.snirf.']);
+        end
+    else
+        nirs.io.saveSNIRF(data(i,1),save_name)
+        disp(['[',num2str(i),']',' Saved ',save_name,'.']);
+    end
+    end
+end
+    
 function [stim_table] = stimTableMapper(stim_table, ...
                             new_names, new_onsets, new_durs)
     for table=1:height(stim_table)
         len = width(stim_table);
-        if length(new_names)  == 1
+        if isscalar(new_names)
             new_names = arrayfun(@(n) sprintf('channel_%d', n), 1:len, ...
                 'UniformOutput', false); 
         end
         new_names = [{''} new_names];
         
-        if length(new_onsets) == 1
+        if isscalar(new_onsets)
             new_onsets = ones(1,len)*new_onsets;
         end
         
-        if length(new_durs)   == 1
+        if isscalar(new_durs)
             new_durs = ones(1,len)*new_durs;
         end
 
