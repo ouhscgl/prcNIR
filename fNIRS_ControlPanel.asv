@@ -401,12 +401,12 @@ function saveContrastTable(ContrastStatsTable, currentContrast)
     else
         od = '';
     end
-    if isfield(params, 'output_prefix')
-        op = [params.output_prefix, '_'];
+    if isfield(params, 'output_dir')
+        od = params.output_dir;
     else
-        op = '';
+        od = '';
     end
-    writetable(ContrastStatsTable, [od filesep op CST_name,'.csv'])
+    writetable(ContrastStatsTable, [od filesep CST_name,'.csv'])
 end
 
 function saveContrastFigure(type, extension)
@@ -435,12 +435,7 @@ function saveContrastFigure(type, extension)
         else
             od = '';
         end
-        if isfield(params, 'output_prefix')
-            op = [params.output_prefix, '_'];
-        else
-            op = '';
-        end
-        customName = [od '/' op replace(originName,' : ','_'),'_',s,'.',...
+        customName = [od '/' replace(originName,' : ','_'),'_',s,'.',...
                       extension];
         customName = replace(customName,':','_');
         saveas(figHandles(figcount), customName);
