@@ -425,15 +425,101 @@ end
             if events_created
                 % Update keys after removing old ones and adding new ones
                 stim_keys = data_raws(i).stimulus.keys;
-                break;
+                events_created = false;
             end
         end
     end
 
-    %-- Check available stimuli first
-    available_stims = nirs.getStimNames(data_raws);
-    disp('Available stimuli in raw data (after restructuring):');
-    disp(available_stims);
+    % === MODIFIED CODE FOR GROUP ANALYSIS ===
+    % Check if we're dealing with group data by looking at the size of data_raws
+    is_group_analysis = length(data_raws) > 1;
+    
+    if is_group_analysis
+        disp('Detected group analysis with multiple subjects.');
+        
+        % For group analysis, we want to use the unique stimulus types
+        % Create a map to track unique stimulus names across all subjects
+        unique_stim_map = containers.Map();
+        
+        % First pass: identify all unique stimulus types across subjects
+        for i = 1:length(data_raws)
+            stim_keys = data_raws(i).stimulus.keys;
+            for j = 1:length(stim_keys)
+                key = stim_keys{j};
+                if ~unique_stim_map.isKey(key)
+                    unique_stim_map(key) = 1;
+                else
+                    unique_stim_map(key) = unique_stim_map(key) + 1;
+                end
+            end
+        end
+        
+        % Get unique stimulus names
+        unique_stims = unique_stim_map.keys();
+        
+        % Check if we have 'event' stimuli (from restructuring)
+        event_stims = {};
+        for i = 1:length(unique_stims)
+            if startsWith(unique_stims{i}, 'event')
+                event_stims{end+1} = unique_stims{i}; %#ok<AGROW>
+            end
+        end
+        
+        % Sort event stimuli numerically to maintain order
+        if ~isempty(event_stims)
+            % Extract numbers from event names
+            event_nums = zeros(length(event_stims), 1);
+            for i = 1:length(event_stims)
+                % Get the numeric part of the event name (e.g., 'event1' -> 1)
+                event_num = str2double(regexprep(event_stims{i}, 'event', ''));
+                if ~isnan(event_num)
+                    event_nums(i) = event_num;
+                end
+            end
+            
+            % Sort by event number
+            [~, idx] = sort(event_nums);
+            event_stims = event_stims(idx);
+            
+            disp('Found and sorted event stimuli:');
+            disp(event_stims);
+        end
+        
+        % If we found exactly the number of expected stimulus types, use those directly
+        if length(unique_stims) == length(stim_names)
+            disp('Found exact match of unique stimulus types across subjects.');
+            available_stims = unique_stims;
+        elseif length(event_stims) == length(stim_names)
+            disp('Found matching event stimuli across subjects.');
+            available_stims = event_stims;
+        else
+            % Otherwise, use most common stimulus types up to our expected count
+            stim_counts = zeros(1, length(unique_stims));
+            for i = 1:length(unique_stims)
+                stim_counts(i) = unique_stim_map(unique_stims{i});
+            end
+            
+            [~, idx] = sort(stim_counts, 'descend');
+            
+            % Get the top most frequent stimuli matching our expected count
+            if length(unique_stims) >= length(stim_names)
+                available_stims = unique_stims(idx(1:length(stim_names)));
+            else
+                warning(['Fewer unique stimulus types (%d) found than expected (%d). Using all available.'], ...
+                        length(unique_stims), length(stim_names));
+                available_stims = unique_stims;
+            end
+        end
+        
+        disp('Unique stimuli identified across all subjects:');
+        disp(available_stims);
+    else
+        % Standard case for single-subject processing
+        available_stims = nirs.getStimNames(data_raws);
+        disp('Available stimuli in raw data (after restructuring):');
+        disp(available_stims);
+    end
+    % === END MODIFIED CODE ===
 
     %-- Handle NaN in stimulus names (leave original names unchanged)
     use_original_names = false;
@@ -448,10 +534,40 @@ end
         warning(['Number of provided stimulus names (%d) does not ' ...
                  'match available stimuli (%d)'], ...
                 length(stim_names), length(available_stims));
-        % Create mapping only for available stimuli or expected stimuli
-        mapping_length = min(length(stim_names), length(available_stims));
-        stim_names_to_use = stim_names(1:mapping_length);
-        available_stims_to_use = available_stims(1:mapping_length);
+        
+        % === MODIFIED CODE ===
+        % For group analysis with mismatched counts, be more flexible
+        if is_group_analysis
+            disp('Attempting to match stimulus names for group analysis...');
+            
+            % If we have more stimuli than names, take subset of stimuli
+            if length(available_stims) > length(stim_names)
+                mapping_length = length(stim_names);
+                available_stims_to_use = available_stims(1:mapping_length);
+                stim_names_to_use = stim_names;
+                
+                disp('Using first available stimuli to match expected names:');
+                for i = 1:mapping_length
+                    disp(['  ' available_stims_to_use{i} ' -> ' stim_names_to_use{i}]);
+                end
+            else
+                % If we have fewer stimuli than names, use all available stimuli
+                mapping_length = length(available_stims);
+                available_stims_to_use = available_stims;
+                stim_names_to_use = stim_names(1:mapping_length);
+                
+                disp('Using available stimuli with subset of expected names:');
+                for i = 1:mapping_length
+                    disp(['  ' available_stims_to_use{i} ' -> ' stim_names_to_use{i}]);
+                end
+            end
+        else
+            % Original behavior for non-group analysis
+            mapping_length = min(length(stim_names), length(available_stims));
+            stim_names_to_use = stim_names(1:mapping_length);
+            available_stims_to_use = available_stims(1:mapping_length);
+        end
+        % === END MODIFIED CODE ===
     else
         stim_names_to_use = stim_names;
         available_stims_to_use = available_stims;
@@ -546,12 +662,40 @@ end
         else
             % Create mapping with proper validation
             rename_mapping = cell(length(available_stims_to_use), 2);
-            for i = 1:length(available_stims_to_use)
-                rename_mapping{i, 1} = available_stims_to_use{i};
-                if i <= length(stim_names_to_use)
-                    rename_mapping{i, 2} = stim_names_to_use{i};
-                else
-                    rename_mapping{i, 2} = available_stims_to_use{i};
+            
+            % For event-based stimuli, we need to preserve numeric order
+            if is_group_analysis && all(cellfun(@(x) startsWith(x, 'event'), available_stims_to_use))
+                % Extract event numbers for sorting
+                event_nums = zeros(length(available_stims_to_use), 1);
+                for i = 1:length(available_stims_to_use)
+                    event_nums(i) = str2double(regexprep(available_stims_to_use{i}, 'event', ''));
+                end
+                
+                % Sort by event number
+                [~, idx] = sort(event_nums);
+                sorted_stims = available_stims_to_use(idx);
+                
+                % Create mapping in sorted order
+                for i = 1:length(sorted_stims)
+                    rename_mapping{i, 1} = sorted_stims{i};
+                    if i <= length(stim_names_to_use)
+                        rename_mapping{i, 2} = stim_names_to_use{i};
+                    else
+                        rename_mapping{i, 2} = sorted_stims{i};
+                    end
+                end
+                
+                disp('Created stimulus mapping with numerical ordering:');
+                disp(rename_mapping);
+            else
+                % Standard mapping for non-event stimuli
+                for i = 1:length(available_stims_to_use)
+                    rename_mapping{i, 1} = available_stims_to_use{i};
+                    if i <= length(stim_names_to_use)
+                        rename_mapping{i, 2} = stim_names_to_use{i};
+                    else
+                        rename_mapping{i, 2} = available_stims_to_use{i};
+                    end
                 end
             end
         end
@@ -566,5 +710,5 @@ end
     rename_mapping = {};
     end
 end
-% _________________________________________________________________________
+    % _________________________________________________________________________
 end

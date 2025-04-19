@@ -115,8 +115,8 @@ if autoMode
     end
     
     % Set significance gating
-    if isfield(params, 'significance')
-        s = params.significance(1); % Take first character (p or q)
+    if ~isfield(params, 'significance')
+        params.significance = {'p'}; % Take first character (p or q)
     end
     
     % Set visualization method
@@ -253,41 +253,47 @@ function processContrast(contrast, autoClose)
     if optodeMap ~= 0
         ContrastStatsCE.probe.optodes_registered = optodeMap;
     end
-    ContrastStatsCE.draw('tstat',[-8 8], [s,'<0.05']);
-
-    % Save statistics table(s), figure(s)
-    if autoMode
-        % Use params for saving choices
-        if isfield(params, 'saveHbo') && params.saveHbo
-            saveContrastFigure('hbo', figureFormat);
-        end
-        if isfield(params, 'saveHbr') && params.saveHbr
-            saveContrastFigure('hbr', figureFormat);
-        end
-        if isfield(params, 'saveCoeff') && params.saveCoeff
-            saveContrastTable(ContrastStatsTable, contrast);
-        end
-    else
-        % Use UI checkboxes for saving choices
-        if cb1.Value == 1
-            saveContrastFigure('hbo', figureFormat);
-        end
-        if cb2.Value == 1
-            saveContrastFigure('hbr', figureFormat);
-        end
-        if cb3.Value == 1
-            saveContrastTable(ContrastStatsTable, contrast);
-        end
+    if ~autoMode
+        params.significance = s;
     end
-    
-    % Close figures if in auto mode
-    if autoClose
-        figHandles = findall(0, 'Type', 'figure');
-        for figcount = 1:length(figHandles)
-            originName = figHandles(figcount).Name;
-            if ~strcmp(originName, 'Condition Control Panel')
-                pause(0.5); % Give a brief pause to ensure saving completes
-                close(figHandles(figcount));
+    for sign = 1:length(params.significance)
+        s = params.significance{sign};
+        ContrastStatsCE.draw('tstat',[-8 8], [s,'<0.05']);
+
+        % Save statistics table(s), figure(s)
+        if autoMode
+            % Use params for saving choices
+            if isfield(params, 'saveHbo') && params.saveHbo
+                saveContrastFigure('hbo', figureFormat);
+            end
+            if isfield(params, 'saveHbr') && params.saveHbr
+                saveContrastFigure('hbr', figureFormat);
+            end
+            if isfield(params, 'saveCoeff') && params.saveCoeff
+                saveContrastTable(ContrastStatsTable, contrast);
+            end
+        else
+            % Use UI checkboxes for saving choices
+            if cb1.Value == 1
+                saveContrastFigure('hbo', figureFormat);
+            end
+            if cb2.Value == 1
+                saveContrastFigure('hbr', figureFormat);
+            end
+            if cb3.Value == 1
+                saveContrastTable(ContrastStatsTable, contrast);
+            end
+        end
+        
+        % Close figures if in auto mode
+        if autoClose
+            figHandles = findall(0, 'Type', 'figure');
+            for figcount = 1:length(figHandles)
+                originName = figHandles(figcount).Name;
+                if ~strcmp(originName, 'Condition Control Panel')
+                    pause(0.5); % Give a brief pause to ensure saving completes
+                    close(figHandles(figcount));
+                end
             end
         end
     end
@@ -322,7 +328,7 @@ end
 
 % Defining alpha treshold
 function significanceChanged(event)
-    s = event.NewValue.Text(1);
+    s = {event.NewValue.Text(1)};
 end
 
 % Storing user defined contrast matrix, resetting matrix if empty 
