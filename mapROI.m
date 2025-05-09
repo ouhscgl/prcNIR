@@ -1,160 +1,145 @@
-data = data_raws(1);
-selected_indices = [ 1	 2	 4	 5	 6	 7	 8 	 9	10	11	12	13	...
-                    14	15	16	17	18	19	20	21	23	24];
+function mapROI(data, selected_indices, save_path)
+% Accepts data_raws, data_stat
 
-
-sources   = data.probe.optodes(strcmp(data_raws(1).probe.optodes.Type,...
-                                    'Source'), :);
-detectors = data.probe.optodes(strcmp(data_raws(1).probe.optodes.Type,...
-                                    'Detector'), :);
-landmarks = data.probe.optodes(strcmp(data_raws(1).probe.optodes.Type,...
-                                    'FID-anchor'), :);
-links = data.probe.link(1:height(data.probe.link)/2,:);
-source_x = sources.X;
-source_y = sources.Y;
-detector_x = detectors.X;
-detector_y = detectors.Y;
-landmark_x = landmarks.X;
-landmark_y = landmarks.Y;
-
-% Create a new figure with a specified size
-figure('Position', [100, 100, 800, 600]);
-hold on;
-
-% Calculate all midpoints between linked sources and detectors
-midpoint_x = [];
-midpoint_y = [];
-midpoint_labels = [];
-
+%% Parameters _____________________________________________________________
+% -- sources
+sources   = data.optodes(strcmp(data.optodes.Type,    'Source'), :);
+source_x   =   sources.X; source_y   =   sources.Y;
+% -- detectors
+detectors = data.optodes(strcmp(data.optodes.Type,  'Detector'), :);
+detector_x = detectors.X; detector_y = detectors.Y;
+% -- landmarks
+landmarks = data.optodes(strcmp(data.optodes.Type, 'FID-anchor'), :);
+landmark_x = landmarks.X; landmark_y = landmarks.Y;
+% -- links
+u = unique(data.link.type); u = u(1);
+if ischar(u) || iscell(u) || isstring(u), mask = strcmp(data.link.type, u);
+else, mask = (data.link.type == u); end
+links = data.link; 
+if ~isempty(selected_indices), links_csv = links(selected_indices, :);  end
+% -- display figure
+h = figure('Position', [100, 100, 800, 600], 'Color','white'); hold on;
+set(h,'MenuBar','none','ToolBar','none')
+% _________________________________________________________________________
+%% Plotting midpoints  ____________________________________________________
+mid_x = zeros(height(links),1); mid_y = zeros(height(links),1); 
+midpoint_labels = cell(height(links),1);
+% .. iterate through links
 for i = 1:height(links)
-    source_idx = links.source(i);
-    detector_idx = links.detector(i);
-    
-    % Calculate midpoint
-    mid_x = (source_x(source_idx) + detector_x(detector_idx)) / 2;
-    mid_y = (source_y(source_idx) + detector_y(detector_idx)) / 2;
-    
-    midpoint_x = [midpoint_x; mid_x];
-    midpoint_y = [midpoint_y; mid_y];
-    midpoint_labels{i} = sprintf('S%d-D%d', source_idx, detector_idx);
-    
-    % Draw a line connecting source and detector
-    plot([source_x(source_idx), detector_x(detector_idx)], [source_y(source_idx), detector_y(detector_idx)], 'k--', 'LineWidth', 0.5);
+if ~mask(i), continue, end
+% -- midpoint values
+mid_x(i) = (source_x(links.source(i)) + detector_x(links.detector(i))) / 2;
+mid_y(i) = (source_y(links.source(i)) + detector_y(links.detector(i))) / 2;
+% -- midpoint labels
+midpoint_labels{i} = sprintf('S%d-D%d', links.source(i),links.detector(i));
+% -- graph source - detector connection
+plot([source_x(links.source(i)), detector_x(links.detector(i))], ...
+     [source_y(links.source(i)), detector_y(links.detector(i))], ...
+     'k--', 'LineWidth', 0.5);
 end
+% _________________________________________________________________________
+%% Highlighting selected regions __________________________________________
+sel_x = mid_x(selected_indices); sel_y = mid_y(selected_indices);
 
-% ---- HIGHLIGHT SELECTED REGION ----
-% Extract coordinates of selected midpoints
-selected_x = midpoint_x(selected_indices);
-selected_y = midpoint_y(selected_indices);
-
-% Create a blob (convex hull with padding) around selected points
+% -- blob highlight for many datapoints
 if length(selected_indices) >= 3
-    % Create convex hull of selected points
-    k = convhull(selected_x, selected_y);
-    
-    % Add some padding to the hull to make it "blobby"
-    hull_x = selected_x(k);
-    hull_y = selected_y(k);
-    
-    % Calculate centroid of the hull
-    centroid_x = mean(hull_x);
-    centroid_y = mean(hull_y);
-    
-    % Expand points outward from centroid for padding
-    padding_factor = 1.2; % Adjust this to control the blob size
-    expanded_hull_x = centroid_x + (hull_x - centroid_x) * padding_factor;
-    expanded_hull_y = centroid_y + (hull_y - centroid_y) * padding_factor;
-    
-    % Create a smooth blob using a filled polygon with alpha transparency
-    pgon = polyshape(expanded_hull_x, expanded_hull_y);
-    
-    % Plot the smooth blob with semi-transparency
-    pg = plot(pgon);
-    pg.FaceColor = [0.8 0.2 0.2]; % Red blob
-    pg.FaceAlpha = 0.2;          % 20% opacity
-    pg.EdgeColor = [0.8 0.2 0.2]; % Red edge
-    pg.LineWidth = 2;             % Thicker edge
-    
+% >> blob variables
+k = convhull(sel_x, sel_y); hull_x = sel_x(k); hull_y = sel_y(k);
+centroid_x = mean(hull_x); centroid_y = mean(hull_y);
+% >> padding
+padding_factor = 1.2; % Adjust this to control the blob size
+expanded_hull_x = centroid_x + (hull_x - centroid_x) * padding_factor;
+expanded_hull_y = centroid_y + (hull_y - centroid_y) * padding_factor;
+% >> create blob & settings
+pgon = polyshape(expanded_hull_x, expanded_hull_y);
+pg = plot(pgon);
+pg.FaceColor = [0.8 0.2 0.2];
+pg.FaceAlpha = 0.2;
+pg.EdgeColor = [0.8 0.2 0.2];
+pg.LineWidth = 2;
+
+% -- ellipsoid highlight for 2 points
 elseif length(selected_indices) == 2
-    % For only 2 points, create an ellipse around them
-    center_x = mean(selected_x);
-    center_y = mean(selected_y);
-    
-    % Calculate distance between points and use it for ellipse size
-    dist = sqrt((selected_x(1) - selected_x(2))^2 + (selected_y(1) - selected_y(2))^2);
-    a = dist * 0.75; % Semi-major axis
-    b = dist * 0.5;  % Semi-minor axis
-    
-    % Create ellipse points
-    theta = linspace(0, 2*pi, 100);
-    ellipse_x = center_x + a * cos(theta);
-    ellipse_y = center_y + b * sin(theta);
-    
-    % Plot filled ellipse
-    fill(ellipse_x, ellipse_y, [0.8 0.2 0.2], 'FaceAlpha', 0.2, 'EdgeColor', [0.8 0.2 0.2], 'LineWidth', 2);
-    
-elseif length(selected_indices) == 1
-    % For a single point, create a circle around it
-    center_x = selected_x;
-    center_y = selected_y;
-    radius = 0.1; % Adjust based on your coordinate scale
-    
-    % Create circle points
-    theta = linspace(0, 2*pi, 100);
-    circle_x = center_x + radius * cos(theta);
-    circle_y = center_y + radius * sin(theta);
-    
-    % Plot filled circle
-    fill(circle_x, circle_y, [0.8 0.2 0.2], 'FaceAlpha', 0.2, 'EdgeColor', [0.8 0.2 0.2], 'LineWidth', 2);
-end
+% >> ellipse parameters
+cen_x = mean(sel_x); cen_y = mean(sel_y);
+dist = sqrt((sel_x(1) - sel_x(2))^2 + (sel_y(1) - sel_y(2))^2);
+a = dist * 0.75; b = dist * 0.5; theta = linspace(0, 2*pi, 100);
+ellipse_x = cen_x + a * cos(theta); ellipse_y = cen_y + b * sin(theta);
+% >> create ellipse    
+fill(ellipse_x, ellipse_y, [0.8 0.2 0.2], 'FaceAlpha', 0.2, ...
+     'EdgeColor', [0.8 0.2 0.2], 'LineWidth', 2);
 
-% Plot sources (red)
+% -- circular highlight for single point    
+elseif isscalar(selected_indices)
+% >> circle parameters
+theta = linspace(0, 2*pi, 100);
+cen_x = sel_x; cen_y = sel_y; radius = 0.1;
+cir_x = cen_x + radius * cos(theta); cir_y = cen_y + radius * sin(theta);
+% >> create circle
+fill(cir_x, cir_y, [0.8 0.2 0.2], 'FaceAlpha', 0.2, ...
+     'EdgeColor', [0.8 0.2 0.2], 'LineWidth', 2);
+end
+% _________________________________________________________________________
+%% Plotting sources  ______________________________________________________
+% -- values
 scatter(source_x, source_y, 100, 'r', 'filled');
-% Add source labels (indices)
+% -- labels
 for i = 1:length(source_x)
-    text(source_x(i), source_y(i), sprintf(' S%d', i), 'FontSize', 10, 'VerticalAlignment', 'bottom');
+    text(source_x(i), source_y(i), ...
+         sprintf(' S%d', i), 'FontSize', 10, 'VerticalAlignment','bottom');
 end
-
-% Plot detectors (blue)
+% _________________________________________________________________________
+%% Plotting detectors _____________________________________________________
+% -- values
 scatter(detector_x, detector_y, 100, 'b', 'filled');
-% Add detector labels (indices)
+% -- labels
 for i = 1:length(detector_x)
-    text(detector_x(i), detector_y(i), sprintf(' D%d', i), 'FontSize', 10, 'VerticalAlignment', 'bottom');
+    text(detector_x(i), detector_y(i)-0.02, ...
+         sprintf(' D%d', i), 'FontSize', 10, 'VerticalAlignment','bottom');
 end
-
-% Plot all midpoints
-scatter(midpoint_x, midpoint_y, 50, 'g', 'filled');
-
-% Highlight selected midpoints with a different color and size
-scatter(midpoint_x(selected_indices), midpoint_y(selected_indices), 80, 'r', 'filled');
-
-% Add midpoint labels
-for i = 1:length(midpoint_x)
-    text(midpoint_x(i), midpoint_y(i), sprintf(' %s', num2str(i)), 'FontSize', 8, 'VerticalAlignment', 'bottom');
+% _________________________________________________________________________
+%% Plotting midpoints _____________________________________________________
+% -- unselected values
+scatter(mid_x, mid_y, ...
+        50, 'g', 'filled');
+% -- selected values
+scatter(mid_x(selected_indices), mid_y(selected_indices), ...
+        80, 'r', 'filled');
+% -- labels
+for i = 1:length(mid_x)
+    text(mid_x(i), mid_y(i), ...
+         sprintf(' %s', num2str(i)), 'FontSize', 8, ...
+         'VerticalAlignment', 'bottom');
 end
-
-% Plot landmarks (black)
+scatter(0, 0, 600, 'k', 'filled');
+% _________________________________________________________________________
+%% Plotting landmarks _____________________________________________________
+% -- values
 scatter(landmark_x, landmark_y, 60, 'k', 'filled');
-% Add landmark labels (Names)
+% -- labels
 for i = 1:length(landmark_x)
-    text(landmark_x(i)-0.04, landmark_y(i)-0.04, sprintf(' %s', landmarks.Name{i}), 'FontSize', 10, 'VerticalAlignment', 'bottom');
+    text(landmark_x(i)-0.04, landmark_y(i)-0.04, ...
+         sprintf(' %s', landmarks.Name{i}), 'FontSize', 10, ...
+         'VerticalAlignment', 'bottom');
 end
-
-% Add a legend
-legend({'Region of Interest', 'Sources', 'Detectors', 'Channels', 'Selected Channels', 'Landmarks'}, 'Location', 'best');
-
-% Set axis labels
-xlabel('X Coordinate');
-ylabel('Y Coordinate');
-title('fNIRS Probe Configuration');
-
-% Set equal axis scaling and add grid
-axis equal;
-grid on;
-
-% Add some padding around the plots
+% _________________________________________________________________________
+%% Formatting figure ______________________________________________________
+% -- legend
+% legend({'Region of Interest', 'Sources', 'Detectors', 'Channels', ...
+%         'Selected Channels', 'Landmarks'}, 'Location', 'best');
+% -- axis labels, scaling, grid
+title('fNIRS Probe Configuration'); axis equal; grid on; axis off;
+% -- padding
 ax = gca;
-ax.XLim = [min([source_x; detector_x; landmark_x])*1.1, max([source_x; detector_x; landmark_x])*1.1];
-ax.YLim = [min([source_y; detector_y; landmark_y])*1.1, max([source_y; detector_y; landmark_y])*1.1];
-
+ax.XLim = [min([source_x; detector_x; landmark_x])*1.1, ...
+           max([source_x; detector_x; landmark_x])*1.1];
+ax.YLim = [min([source_y; detector_y; landmark_y])*1.1, ...
+           max([source_y; detector_y; landmark_y])*1.1];
 hold off;
+% _________________________________________________________________________
+%% Save variables _________________________________________________________
+if isempty(save_path), return, end
+writetable(links_csv,fullfile(save_path,'beta_ROI.csv'))
+saveas    (h,        fullfile(save_path,'beta_ROI.png'))
+% _________________________________________________________________________
+end

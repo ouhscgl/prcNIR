@@ -33,38 +33,28 @@ disp('-------------------------------------------------------------------')
 
 % Auxilliary functions
 function patch_function(folder, filename, pattern, replacement)
-    success = false;
-    if ~exist(folder, 'dir')
-        warning('Root folder does not exist: %s', folder);
-        return;
-    end
-    allfiles = dir(fullfile(folder, '**', filename));
-    if ~isempty(allfiles)
-        filePath = fullfile(allfiles(1).folder, allfiles(1).name);
-    else
-        warning('File not found: %s', filename);
-        return;
-    end
+% -- check for root directory
+success = false;
+if ~exist(folder,'dir'),warning('Root non existant: %s',folder);return;end
 
-    fileText = fileread(filePath);
-    newText = strrep(fileText, pattern, replacement);
-    if ~strcmp(newText, fileText)
-        success = true;
-    end
-    
-    % Write the modified text back to the file
-    fid = fopen(filePath, 'w');
-    if fid == -1
-        error('Could not open file for writing');
-    end
-    fprintf(fid, '%s', newText);
-    fclose(fid);
-    
-    if success
-        disp(['Modified file: ' filePath]);
-    else
-        disp('File is already patched.');
-    end
+% -- check for files 
+allfiles = dir(fullfile(folder, '**', filename));
+if isempty(allfiles), warning('File not found: %s', filename); return; end
 
+% -- assign io variables
+filePath = fullfile(allfiles(1).folder, allfiles(1).name);
+fileText = fileread(filePath); 
+
+% -- rewrite section
+newText = strrep(fileText, pattern, replacement);
+if ~strcmp(newText, fileText), success = true; end
     
+% -- write to file
+fid = fopen(filePath, 'w');
+if fid == -1, error('Could not open file for writing'); end
+fprintf(fid, '%s', newText);
+fclose(fid);
+
+if success, disp(['Modified file: ' filePath]);
+else, disp('File is already patched.'); end
 end

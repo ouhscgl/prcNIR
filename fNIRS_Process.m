@@ -77,11 +77,13 @@ end
 % correlated errors in fNIRS. Biomedical optics express, 4(8), 1366–1379. 
 % https://doi.org/10.1364/BOE.4.001366
 job = nirs.modules.GLM                  ();
+job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
 if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
        any(data_prps(1).probe.link.ShortSeperation == 1)
     job.AddShortSepRegressors = true;
+else
+    job = nirs.modules.RemoveShortSeperations(job);
 end
-job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
 data_stat = job.run(data_prps);
 % _________________________________________________________________________
 
