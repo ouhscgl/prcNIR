@@ -528,14 +528,28 @@ global params groups output
 % Data management _________________________________________________________
 %-- Read data
 %-- Extract mask coordinates
-[roi,~] = extractROI(hdr_file,{'S-D-Mask="#','#"'},{2,2});
-hdr_mask_beg= strfind(hdr_file,'S-D-Mask="#')+length('S-D-Mask="#\n');
-hdr_mask_end= strfind(hdr_file(hdr_mask_beg:end), '#"')-length('\n#"');
-hdr_sdkeys  = hdr_file(hdr_mask_beg:hdr_mask_beg + hdr_mask_end(1));
+marker_pos = strfind(hdr_file, 'S-D-Mask="#');
+marker_end = marker_pos + length('S-D-Mask="#');
+
+% Find the actual start of data (first numeric character)
+next_digit = regexp(hdr_file(marker_end:end), '[0-9]', 'once');
+hdr_mask_beg = marker_end + next_digit - 1;
+
+% Find the end marker
+relative_text = hdr_file(hdr_mask_beg:end);
+end_marker_pos = strfind(relative_text, '#"');
+hdr_mask_end = hdr_mask_beg + end_marker_pos(1) - 2;
+
+% Extract data and remove any trailing whitespace
+hdr_sdkeys = strtrim(hdr_file(hdr_mask_beg:hdr_mask_end));
 
 %-- Parse S-D:Key content
 output.SDKeys = [];
 hdr_lines = strsplit(hdr_sdkeys, '\n');
+
+% Filter out empty lines
+hdr_lines = hdr_lines(~cellfun(@isempty, strtrim(hdr_lines)));
+
 for i = 1:length(hdr_lines)
     line = strsplit(strtrim(hdr_lines{i}));
     if ~isempty(line)

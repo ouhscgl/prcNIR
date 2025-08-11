@@ -413,9 +413,10 @@ function saveContrastTable(ContrastStatsTable, currentContrast)
         op = '';
     end
     writetable(ContrastStatsTable, [od filesep op CST_name,'.csv'])
+    disp(['Saved contrast to:', od filesep op CST_name,'.csv.'])
 end
 
-function saveContrastFigure(type, extension)
+    function saveContrastFigure(type, extension)
     figHandles = findall(0, 'Type', 'figure');
     for figcount = 1:length(figHandles)
         originName = figHandles(figcount).Name;
@@ -436,6 +437,7 @@ function saveContrastFigure(type, extension)
                 end
             end
         end
+        
         if isfield(params, 'output_dir')
             od = params.output_dir;
         else
@@ -446,10 +448,71 @@ function saveContrastFigure(type, extension)
         else
             op = '';
         end
-        customName = [od '/' op replace(originName,' : ','_'),'_',s,'.',...
-                      extension];
-        customName = replace(customName,':','_');
-        saveas(figHandles(figcount), customName);
+        
+        % Create initial filename
+        baseFileName = [op replace(originName,' : ','_'),'_',s];
+        baseFileName = replace(baseFileName,':','_');
+        
+        % Filename length protection
+        maxFileNameLength = 200; % Safe limit for most filesystems
+        maxPathLength = 240;     % Safe limit for Windows full paths
+        
+        % Check filename length (without extension)
+        if length(baseFileName) > maxFileNameLength - length(extension) - 1
+            % Create a hash of the original name for uniqueness
+            originalHash = string(java.lang.String(baseFileName).hashCode());
+            originalHash = replace(originalHash, '-', 'n'); % Replace negative sign
+            
+            % Truncate and add hash
+            maxBaseLength = maxFileNameLength - length(extension) - length(originalHash) - 2; % -2 for underscore and dot
+            if maxBaseLength > 20
+                truncatedName = baseFileName(1:maxBaseLength);
+                baseFileName = [truncatedName '_' char(originalHash)];
+            else
+                % If even truncated name would be too long, use only hash-based name
+                baseFileName = ['fig_' type '_' originalHash];
+            end
+            
+            warning(['Filename was too long and has been shortened:', baseFileName]);
+        end
+        
+        % Construct full path
+        customName = fullfile(od, [baseFileName, '.', extension]);
+        
+        % Check total path length (important for Windows)
+        if ispc && length(customName) > maxPathLength
+            % Further shorten the filename
+            [pathStr, name, ext] = fileparts(customName);
+            availableLength = maxPathLength - length(pathStr) - length(ext) - 1; % -1 for path separator
+            
+            if availableLength > 10
+                % Create a very short name with hash
+                shortHash = string(java.lang.String(name).hashCode());
+                shortHash = replace(shortHash, '-', 'n');
+                shortName = ['fig_' shortHash(1:min(6, length(shortHash)))];
+                customName = fullfile(pathStr, [shortName, ext]);
+            else
+                error('Output directory path is too long to create any filename');
+            end
+            
+            warning('Full path was too long and filename has been further shortened');
+        end
+        
+        try
+            saveas(figHandles(figcount), customName);
+            disp(['Saved figure to: ', customName]);
+        catch ME
+            if contains(ME.message, 'Invalid filename') || contains(ME.message, 'name too long')
+                % Final fallback: use figure number and timestamp
+                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+                fallbackName = fullfile(od, sprintf('fig_%s_%d_%s.%s', type, figcount, timestamp, extension));
+                saveas(figHandles(figcount), fallbackName);
+                disp(['Saved figure with fallback name to: ', fallbackName]);
+                warning('Used fallback filename due to filesystem limitations');
+            else
+                rethrow(ME);
+            end
+        end
     end
 end
 % _________________________________________________________________________
