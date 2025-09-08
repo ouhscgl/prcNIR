@@ -9,17 +9,32 @@ function fNIRS_visualize_layout(json_file)
 %       visualize_nirs_layout('data_old.json')
 
 % Load the JSON file
+%jsonData = jsonencode(json_file, PrettyPrint=true);
 %jsonData = jsondecode(fileread(json_file));
-jsonData = jsonencode(json_file, PrettyPrint=true);
+jsonData = json_file;
+
+% Determine if old or new format based on source naming pattern
+if istable(jsonData.optodes_registered)
+    % Convert table to struct array for consistent processing
+    optodes = table2struct(jsonData.optodes_registered);
+    num_optodes = height(jsonData.optodes_registered);
+else
+    % Already a struct array
+    optodes = jsonData.optodes_registered;
+    num_optodes = length(jsonData.optodes_registered);
+end
 
 % Determine if old or new format based on source naming pattern
 first_source = '';
-for i = 1:length(jsonData.optodes_registered)
-    if contains(jsonData.optodes_registered(i).Type, 'Source')
-        first_source = jsonData.optodes_registered(i).Name;
+for i = 1:num_optodes
+    if contains(optodes(i).Type, 'Source')
+        first_source = optodes(i).Name;
         break;
     end
 end
+
+% Check format based on naming pattern
+isOldFormat = contains(first_source, '-0');
 
 % Check format based on naming pattern
 isOldFormat = contains(first_source, '-0');

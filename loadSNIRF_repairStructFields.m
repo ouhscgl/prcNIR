@@ -15,10 +15,29 @@ function repairedArray = loadSNIRF_repairStructFields(array)
 %   MATLAB compatible.
 % @zkaposzt
 
+% -- specific rows to keep, default = all
+keepRows = true(size(array, 1), 1);
+
 % .. iterate through every field
 for i = 1:size(array, 1)
-% -- if its a string or character array and contains 0x20
+
 if ischar(array{i, 1}) || isstring(array{i, 1})
-if contains(array{i,1},' '), array{i, 1}=strrep(array{i,1},' ', '');end;end
-end; repairedArray = array;
+
+% -- remove 0x20 from fieldname
+if contains(array{i,1},' '), array{i, 1}=strrep(array{i,1},' ', '');    end
+
+% -- remove 'dataUnit' fields
+if endsWith(array{i,1}, 'dataUnit'), keepRows(i) = false; continue;     end
+
+% -- transpose malformed dataTimeSeries
+f = 'dataTimeSeries'; txVal = diff(size(array{i,2})) < 0;
+if contains(array{i,1},f) && txVal, array{i,2} = array{i,2}';           end
+end
+
+% -- modify un-resolvable fieldtype format
+f = 'hdf5.h5string';
+if contains(array{i,3},f), array{i, 3} = strrep(array{i,3},f, 'char');  end
+
+% -- return array
+repairedArray = array(keepRows, :);
 end
