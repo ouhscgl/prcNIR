@@ -82,7 +82,7 @@ if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
 else
     job = nirs.modules.RemoveShortSeperations(job);
 end
-data_stat = job.run(data_prps);
+data_s tat = job.run(data_prps);
 % _________________________________________________________________________
 
 % Extract data from the preprocessing pipeline ____________________________

@@ -17,16 +17,28 @@ function [filteredStruct, mask] = loadSNIRF_filterStructArray(structArray)
 %   importing into nirs-toolbox appropriately.
 % @zkaposzt
 
-% -- check if data is pre-processed
-if isscalar(unique({structArray(:).dataTypeLabel}))
-filteredStruct = structArray; mask = true(size(structArray));return;end
+% -- check if data is direct NIRx recording
+if isfield(structArray, 'dataTypeLabel')
+    % -- check if data is pre-processed
+    if isscalar(unique({structArray(:).dataTypeLabel}))
+        filteredStruct = structArray; 
+        mask = true(size(structArray));
+        return;
+    end
+% -- check if data went through mne
+else
+    [structArray.dataTypeLabel] = deal('raw-DC');
+
+end
 
 % .. iterate through array to create data mask
 mask = false(size(structArray));
 for i = 1:length(structArray)
 % -- check for pre-processed labels (HbO, HbR)
-label = structArray(i).dataTypeLabel;
-if strcmp(label, 'HbO') || strcmp(label, 'HbR')
+if isfield(structArray, 'dataTypeLabel')
+    label = structArray(i).dataTypeLabel;
+    if strcmp(label, 'HbO') || strcmp(label, 'HbR')
+end
 % -- select and activate data row
 mask(i) = true; structArray(i).dataTypeIndex = 1;
 % -- set wavelength idx according to data type
