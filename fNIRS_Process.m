@@ -99,62 +99,92 @@ for iter = 1:length(user_vars.regression_formula)
     disp(GroupStats(iter).conditions)
 end
 % _________________________________________________________________________
-
-% Save preprocessed data as .snirf ________________________________________
-if user_vars.save_as_snirf_flag == true
-    saveAsSNIRF(data_prps, demograph, load_path, ...
-        user_vars.overwrite_as_snirf)
-end
 disp('Finished processing data.')
 % _________________________________________________________________________
 
 % Auxillary functions _____________________________________________________
-function data_raws = loadNIRSData(load_path)
+function data_raws = loadNIRSData(load_path, user_vars)
     % -- user specified: directory
     if isfolder(load_path)
-        % -- check supported files
-        snirf_files = dir(fullfile(load_path, '*.snirf'));
-        nirx_files = dir(fullfile(load_path, '*.wl1'));
         
-        % -- directory contains snirf file(s)
-        if ~isempty(snirf_files)
-        % -- single file
-        if isscalar(snirf_files)
-            data_raws = nirs.io.loadSNIRF( ...
-                fullfile(load_path, snirf_files(1).name));
-        % -- multiple files
-        else
-            data_raws = nirs.io.loadDirectory(load_path, ...
-                user_vars.folder_structure, ...
-                @nirs.io.loadSNIRF, {'.snirf'});
+        % Check low-level directories
+        leaf_dirs = getLeafDirs(load_path);
+        if isempty(leaf_dirs)
+        error('No subdirectories found in: %s', load_path); end
+
+        % Gather supported files
+        loadable_dirs = {};  file_types = {};
+        for i = 1:length(leaf_dirs)
+            dir_path = leaf_dirs{i};
+            
+            % :: .snirf
+            snirf_files = dir(fullfile(dir_path, '*.snirf'));
+            if ~isempty(snirf_files)
+                loadable_dirs{end+1} = dir_path;
+                file_types{end+1} = 'snirf';
+                continue;
+            end
+            
+            % :: NIRx
+            wl1_files = dir(fullfile(dir_path, '*.wl1'));
+            if ~isempty(wl1_files)
+                loadable_dirs{end+1} = dir_path;
+                file_types{end+1} = 'nirx';
+            end
         end
+        if isempty(loadable_dirs)
+        error('No valid data files found in: %s', load_path); end
         
-        % -- directory contains NIRx file(s)
-        elseif ~isempty(nirx_files)
-        % -- single file
-        if isscalar(nirx_files)
-            data_raws = nirs.io.loadNIRx(load_path);
-        % -- multiple files
-        else
-            data_raws = nirs.io.loadDirectory(load_path, ...
-                user_vars.folder_structure, ...
-                @nirs.io.loadNIRx, {'.wl1'});
-        end
-        
-        % -- fallback
-        else
-        try
-            data_raws = nirs.io.loadDirectory(load_path, ...
-                user_vars.folder_structure, ...
-                @nirs.io.loadNIRx, {'.wl1'});
-        catch
-            error('No supported NIRS data files found in directory');
+        % Load valid files
+        data_raws = [];
+        for i = 1:length(loadable_dirs)
+            % -- set iterable directory
+            dir_path = loadable_dirs{i}; file_type = file_types{i};
+            fprintf('[%d/%d] Loading: %s\n', i, length(loadable_dirs), dir_path);
+            
+            try
+            % -- load file
+            if strcmp(file_type, 'snirf')
+                snirf_files = dir(fullfile(dir_path, '*.snirf'));
+                data = nirs.io.loadSNIRF(fullfile(dir_path, snirf_files(1).name));
+            else
+                data = nirs.io.loadNIRx(dir_path);
+            end
+            
+            % -- extract file tree demographics
+            demographics = extractDemographics(dir_path, load_path, ...
+                                             user_vars.folder_structure);
+            
+            % -- assign demographics to data
+            if ~isempty(fieldnames(demographics))
+                demo_fields = fieldnames(demographics);
+                for j = 1:length(demo_fields)
+                    field = demo_fields{j};
+                    data.demographics(field) = demographics.(field);
+                end
+            end
+            
+            % -- assign description to data
+            data.description = dir_path;
+            
+            % -- append to master array
+            if isempty(data_raws), data_raws = data;
+            else, data_raws(end+1) = data; end
+                
+            catch e
+                warning('Error loading %s: %s', dir_path, e.message);
+                fprintf('  Stack trace:\n');
+                for k = 1:length(e.stack)
+                    fprintf('    %s (line %d)\n', e.stack(k).name, e.stack(k).line);
+                end
+            end
         end
         if isempty(data_raws)
-            error('No supported NIRS data files found in directory');
-        end
-        end
-    
+        error('Failed to load any NIRS data from: %s', load_path); end
+
+        % Convert to column vector (ref. nirs.io.loadDirectory)
+        data_raws = data_raws(:);
+
     % -- user specified: file
     elseif isfile(load_path)
         [~, ~, ext] = fileparts(load_path);
@@ -173,27 +203,27 @@ function data_raws = loadNIRSData(load_path)
     end
 end
 
-function saveAsSNIRF(data, demo, load_path, overwrite)
-    for i=1:length(data)
-    visitID = '';
-    if ismember('Visit',demo.Properties.VariableNames)
-        visitID = strcat('_V',demo.Visit(i));
-    end
-    save_name = fullfile(load_path,[demo.Name{i},visitID{:},...
-                            '.snirf']);
-    if isfile(save_name) && ~overwrite
-        validate =input('File already exists. Overwrite? [[y]/n]',"s");
-        if isequal(lower(validate),'y') | isempty(validate)
-            delete(save_name)
-            nirs.io.saveSNIRF(data(i,1),save_name)
-            disp(['Saved ',save_name,'.']);
-        else
-            disp(['Discarded ',demo.Name{i},'.snirf.']);
-        end
-    else
-        nirs.io.saveSNIRF(data(i,1),save_name)
-        disp(['[',num2str(i),']',' Saved ',save_name,'.']);
-    end
+function demographics = extractDemographics(data_path, root_path, folder_structure)
+    demographics = struct();
+    % -- get rel. path from data root & remove leading/trailing filesep(s)
+    if isempty(folder_structure), return; end
+    rpath = strrep(data_path, root_path, '');
+    rpath = regexprep(rpath, '^[/\\]+|[/\\]+$', '');
+    
+    % -- split into folder levels & remove empty entries
+    folder_levels = strsplit(rpath, filesep);
+    folder_levels = folder_levels(~cellfun(@isempty, folder_levels));
+    if isempty(folder_levels), return; end
+  
+    num_to_assign = min(length(folder_levels), length(folder_structure));
+    relevant_folders = folder_levels(end - num_to_assign + 1:end);
+    relevant_structure = folder_structure(end - num_to_assign + 1:end);
+    
+    % -- assign demographics
+    for i = 1:num_to_assign
+        field_name = relevant_structure{i};
+        folder_value = relevant_folders{i};
+        demographics.(field_name) = folder_value;
     end
 end
 
