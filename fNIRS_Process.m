@@ -28,12 +28,12 @@ defaults.do_preprocessing   = true;
 %--Validating user variables, setting to default if variable not present
 user_vars = validateAnalyticParameters(user_vars, defaults);
 %-- Solo or directory data loading ( data_raws.probe.draw )
-data_raws = loadNIRSData(load_path);
+data_raws = loadNIRSData(load_path, user_vars);
 % _________________________________________________________________________
 
 % Probe label unification _________________________________________________
 % -- find NIRSport2 origin data
-hasn = find(cellfun(@(x) endsWith(x, '.snirf'), {data_raws.description}));
+hasn = find(cellfun(@(x) ~endsWith(x, '.snirf'), {data_raws.description}));
 
 % -- defined dictionary (don't f-ing touch this I beg on my knees)
 SRC_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
