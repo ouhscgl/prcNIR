@@ -31,6 +31,64 @@ user_vars = validateAnalyticParameters(user_vars, defaults);
 data_raws = loadNIRSData(load_path);
 % _________________________________________________________________________
 
+% Probe relabeling (if enabled) ___________________________________________
+idx = find(cellfun(@(x) endsWith(x, '.snirf'), {data_raws.description}));
+if user_vars.relabel_probes
+    
+    % Define OLD to NEW mapping
+    old_src = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    new_src = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
+    
+    old_det = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    new_det = [2, 4, 1, 3, 11, 9, 10, NaN, 13, 12, 15, 14, 7, 5, 8, 6];
+    
+    % Create mapping dictionaries
+    src_map = containers.Map(old_src, new_src);
+    det_map = containers.Map(old_det(~isnan(new_det)), new_det(~isnan(new_det)));
+    
+    disp('Source mapping:');
+    disp(src_map);
+    disp('Detector mapping:');
+    disp(det_map);
+    
+    % Apply relabeling to specified subjects
+    if isempty(user_vars.relabel_subjects)
+        % If no subjects specified, relabel all
+        disp('Relabeling ALL subjects...');
+        for i = 1:length(data_raws)
+            data_raws(i).probe = relabel_probe(data_raws(i).probe, src_map, det_map);
+            disp(['  Relabeled subject ' num2str(i)]);
+        end
+    else
+        % Relabel only specified subjects
+        disp(['Relabeling SELECTED subjects: ' strjoin(user_vars.relabel_subjects, ', ')]);
+        
+        % Get demographics table to identify subjects
+        demo_temp = nirs.createDemographicsTable(data_raws);
+        
+        for i = 1:length(data_raws)
+            subject_id = demo_temp.Name{i};
+            
+            if ismember(subject_id, user_vars.relabel_subjects)
+                disp(['  Relabeling subject: ' subject_id ' (index ' num2str(i) ')']);
+                data_raws(i).probe = relabel_probe(data_raws(i).probe, src_map, det_map);
+            else
+                disp(['  Skipping subject: ' subject_id ' (index ' num2str(i) ')']);
+            end
+        end
+    end
+end
+% _________________________________________________________________________
+
+% Sample rate correction __________________________________________________
+rs_min  = min([data_raws.Fs]);
+rs_flag = any(abs([data_raws.Fs] - rs_min) > 0.01);
+if rs_flag
+    job = nirs.modules.Resample(); job.Fs = rs_min;
+    data_raws = job.run(data_raws);
+end
+% _________________________________________________________________________
+
 % Stimulus correction _____________________________________________________
 %-- Change stimulus data ( nirs.getStimNames(data_raws) );
 job = nirs.modules.ChangeStimulusInfo   ();
@@ -113,6 +171,7 @@ function data_raws = loadNIRSData(load_path, user_vars)
         error('No subdirectories found in: %s', load_path); end
 
         % Gather supported files
+        loadable_dirs = {};  file_types = {};
         for i = 1:length(leaf_dirs)
             dir_path = leaf_dirs{i};
             
@@ -138,8 +197,8 @@ function data_raws = loadNIRSData(load_path, user_vars)
         data_raws = [];
         for i = 1:length(loadable_dirs)
             % -- set iterable directory
-            fprintf('[%d/%d] Loading: %s\n', i, length(loadable_dirs), dir_path);
             dir_path = loadable_dirs{i}; file_type = file_types{i};
+            fprintf('[%d/%d] Loading: %s\n', i, length(loadable_dirs), dir_path);
             
             try
             % -- load file
@@ -204,21 +263,13 @@ end
 
 function demographics = extractDemographics(data_path, root_path, folder_structure)
     demographics = struct();
+    % -- get rel. path from data root & remove leading/trailing filesep(s)
     if isempty(folder_structure), return; end
-    
-    % Get relative path from root to data
-    rel_path = strrep(data_path, root_path, '');
-    
-    % -- remove leading/trailing filesep
-    while ~isempty(rel_path) && (rel_path(1) == filesep || rel_path(1) == '/')
-        rel_path = rel_path(2:end);
-    end
-    while ~isempty(rel_path) && (rel_path(end) == filesep || rel_path(end) == '/')
-        rel_path = rel_path(1:end-1);
-    end
+    rpath = strrep(data_path, root_path, '');
+    rpath = regexprep(rpath, '^[/\\]+|[/\\]+$', '');
     
     % -- split into folder levels & remove empty entries
-    folder_levels = strsplit(rel_path, filesep);
+    folder_levels = strsplit(rpath, filesep);
     folder_levels = folder_levels(~cellfun(@isempty, folder_levels));
     if isempty(folder_levels), return; end
   
@@ -226,7 +277,7 @@ function demographics = extractDemographics(data_path, root_path, folder_structu
     relevant_folders = folder_levels(end - num_to_assign + 1:end);
     relevant_structure = folder_structure(end - num_to_assign + 1:end);
     
-    % Assign demographics
+    % -- assign demographics
     for i = 1:num_to_assign
         field_name = relevant_structure{i};
         folder_value = relevant_folders{i};

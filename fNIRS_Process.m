@@ -31,6 +31,33 @@ user_vars = validateAnalyticParameters(user_vars, defaults);
 data_raws = loadNIRSData(load_path);
 % _________________________________________________________________________
 
+% Probe label unification _________________________________________________
+% -- find NIRSport2 origin data
+hasn = find(cellfun(@(x) endsWith(x, '.snirf'), {data_raws.description}));
+
+% -- defined dictionary (don't f-ing touch this I beg on my knees)
+SRC_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+SRC_N = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
+DET_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+DET_N = [2, 4, 1, 3, 11, 9, 10, NaN, 13, 12, 15, 14, 7, 5, 8, 6];
+
+% -- label reassignment surgery
+src_map = containers.Map(SRC_O, SRC_N);
+det_map = containers.Map(DET_O(~isnan(DET_N)),DET_N(~isnan(DET_N)));
+for d = hasn
+data_raws(d).probe = relabel_probe(data_raws(d).probe, src_map, det_map);
+end
+% _________________________________________________________________________
+
+% Sample rate correction __________________________________________________
+rs_min  = min([data_raws.Fs]);
+rs_flag = any(abs([data_raws.Fs] - rs_min) > 0.01);
+if rs_flag
+    job = nirs.modules.Resample(); job.Fs = rs_min;
+    data_raws = job.run(data_raws);
+end
+% _________________________________________________________________________
+
 % Stimulus correction _____________________________________________________
 %-- Change stimulus data ( nirs.getStimNames(data_raws) );
 job = nirs.modules.ChangeStimulusInfo   ();

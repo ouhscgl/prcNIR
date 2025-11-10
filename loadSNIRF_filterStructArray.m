@@ -38,9 +38,10 @@ for i = 1:length(structArray)
 if isfield(structArray, 'dataTypeLabel')
     label = structArray(i).dataTypeLabel;
     if strcmp(label, 'HbO') || strcmp(label, 'HbR')
-end
-% -- select and activate data row
-mask(i) = true; structArray(i).dataTypeIndex = 1;
+        % -- select and activate data row
+        mask(i) = true; structArray(i).dataTypeIndex = 1;
+    end
+
 % -- set wavelength idx according to data type
 if strcmp(label, 'HbO'), structArray(i).wavelengthIndex = 1;
 elseif strcmp(label, 'HbR'), structArray(i).wavelengthIndex = 2;end
