@@ -43,7 +43,7 @@ DET_N = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6]; % this 16 is fa
 
 % -- label reassignment surgery
 src_map = containers.Map(SRC_O, SRC_N);
-det_map = containers.Map(DET_O(~isnan(DET_N)),DET_N(~isnan(DET_N)));
+det_map = containers.Map(DET_O, DET_N);
 for d = hasn
     % -- re-label probe
     [data_raws(d).probe, link_perm, bad_mask] = relabel_probe(...
