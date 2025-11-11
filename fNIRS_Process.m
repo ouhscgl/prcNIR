@@ -39,13 +39,20 @@ hasn = find(cellfun(@(x) ~endsWith(x, 'snirf'), {data_raws.description}));
 SRC_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 SRC_N = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
 DET_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-DET_N = [2, 4, 1, 3, 11, 9, 10, NaN, 13, 12, 15, 14, 7, 5, 8, 6];
+DET_N = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6]; % this 16 is fake and will be removed
 
 % -- label reassignment surgery
 src_map = containers.Map(SRC_O, SRC_N);
 det_map = containers.Map(DET_O(~isnan(DET_N)),DET_N(~isnan(DET_N)));
 for d = hasn
-data_raws(d).probe = relabel_probe(data_raws(d).probe, src_map, det_map);
+    % -- re-label probe
+    [data_raws(d).probe, link_perm, bad_mask] = relabel_probe(...
+        data_raws(d).probe, src_map, det_map, 16);
+    
+    % -- re-label data
+    if ~isempty(link_perm) && ~isempty(data_raws(d).data)
+        data_raws(d).data = data_raws(d).data(:, link_perm);
+    end
 end
 % _________________________________________________________________________
 
@@ -106,6 +113,7 @@ job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
 if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
        any(data_prps(1).probe.link.ShortSeperation == 1)
     job.AddShortSepRegressors = true;
+    job = nirs.modules.RemoveShortSeperations(job);
 else
     job = nirs.modules.RemoveShortSeperations(job);
 end
@@ -116,6 +124,44 @@ data_stat = job.run(data_prps);
 demograph = nirs.createDemographicsTable(data_prps);
 stimulus  = nirs.createStimulusTable(data_prps);
 % _________________________________________________________________________
+
+% Channel alignment across subjects ______________________________________
+% Find common channels across all subjects
+n_subjects = length(data_stat); all_channels = cell(n_subjects, 1);
+for s = 1:n_subjects
+    % -- create unique identifiers
+    vars = data_stat(s).variables;
+    
+    % -- create detector filter mask (exclude detector >= 17)
+    det_mask = vars.detector < 17;
+    
+    % -- filter variables table first
+    vars_filtered = vars(det_mask, :);
+    
+    % -- create channel IDs from filtered variables
+    channel_ids = strcat( ...
+        string(vars_filtered.source),'_',string(vars_filtered.detector),'_', ...
+        string(vars_filtered.type), '_', string(vars_filtered.cond));
+    all_channels{s} = channel_ids;
+end
+% -- find all common channels
+common = all_channels{1};
+for p=2:n_subjects, common=intersect(common, all_channels{p}, 'stable');end
+% -- apply mask to each field
+for p = 1:n_subjects
+    vars = data_stat(p).variables;
+    
+    channel_ids = strcat( ...
+        string(vars.source),'_',string(vars.detector),'_', ...
+        string(vars.type), '_', string(vars.cond));
+    common_mask = ismember(channel_ids, common);
+    
+    % -- combine both masks
+    mask = common_mask;
+    data_stat(p).variables  = data_stat(p).variables(mask, :);
+    data_stat(p).beta       = data_stat(p).beta(mask);
+    data_stat(p).covb       = data_stat(p).covb(mask, mask);
+end
 
 % Statistical analysis (Mixed Effects Model, Wilkinson notation) __________
 job = nirs.modules.MixedEffects         ();
@@ -137,7 +183,8 @@ function data_raws = loadNIRSData(load_path, user_vars)
         % Check low-level directories
         leaf_dirs = getLeafDirs(load_path);
         if isempty(leaf_dirs)
-        error('No subdirectories found in: %s', load_path); end
+            leaf_dirs{1} = load_path;
+        end
 
         % Gather supported files
         loadable_dirs = {};  file_types = {};
@@ -392,7 +439,7 @@ function [stim_table] = stimTableMapper(stim_table, ...
     disp(stim_table.Properties.VariableNames);
 end
 
-    function [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
+function [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
     % Fix numeric stimulus names first
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
@@ -452,8 +499,6 @@ end
         end
     end
     
-    disp('Stimuli renamed to generic marker names in data_raws');
-    
     % Check if user provided stim_names
     use_user_names = ~(isscalar(stim_names) && (isnan(stim_names{1}) || strcmpi(stim_names{1}, 'NaN')));
     
@@ -487,7 +532,6 @@ end
         end
         
         final_names = fixed_stim_names;
-        disp('Stimuli renamed to user-provided names in data_raws');
     else
         % Keep generic names
         final_names = {};
@@ -510,22 +554,20 @@ end
     orig_stim_table = nirs.createStimulusTable(data_raws);
     
     % Apply onset/duration if needed
-    if (isscalar(stim_onset) && isnan(stim_onset)) && (isscalar(stim_dur) && isnan(stim_dur))
+    if (isscalar(stim_onset) && isnan(stim_onset)) ...
+        && (isscalar(stim_dur) && isnan(stim_dur))
         mod_stimTable = orig_stim_table;
     else
-        if isscalar(stim_onset) && isnan(stim_onset)
-            onset_to_use = NaN;
-        else
-            onset_to_use = stim_onset;
+        if isscalar(stim_onset) && isnan(stim_onset), onset_to_use = NaN;
+        else,                                         onset_to_use = stim_onset;
         end
         
-        if isscalar(stim_dur) && isnan(stim_dur)
-            dur_to_use = NaN;
-        else
-            dur_to_use = stim_dur;
+        if isscalar(stim_dur) && isnan(stim_dur), dur_to_use = NaN;
+        else,                                     dur_to_use = stim_dur;
         end
         
-        mod_stimTable = stimTableMapper(orig_stim_table, final_names, onset_to_use, dur_to_use);
+        mod_stimTable = stimTableMapper(orig_stim_table, final_names, ...
+                                        onset_to_use, dur_to_use);
     end
     
     disp('Final stimulus table columns:');

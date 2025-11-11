@@ -37,7 +37,8 @@ for i = 1:length(structArray)
 % -- check for pre-processed labels (HbO, HbR)
 if isfield(structArray, 'dataTypeLabel')
     label = structArray(i).dataTypeLabel;
-    if strcmp(label, 'HbO') || strcmp(label, 'HbR')
+    if strcmp(label, 'RAW')
+    %%if strcmp(label, 'HbO') || strcmp(label, 'HbR')
         % -- select and activate data row
         mask(i) = true; structArray(i).dataTypeIndex = 1;
     end
