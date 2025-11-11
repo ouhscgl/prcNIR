@@ -33,7 +33,7 @@ data_raws = loadNIRSData(load_path, user_vars);
 
 % Probe label unification _________________________________________________
 % -- find NIRSport2 origin data
-hasn = find(cellfun(@(x) ~endsWith(x, '.snirf'), {data_raws.description}));
+hasn = find(cellfun(@(x) ~endsWith(x, 'snirf'), {data_raws.description}));
 
 % -- defined dictionary (don't f-ing touch this I beg on my knees)
 SRC_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -192,7 +192,7 @@ function data_raws = loadNIRSData(load_path, user_vars)
             end
             
             % -- assign description to data
-            data.description = dir_path;
+            data.description = [dir_path, '/', file_type];
             
             % -- append to master array
             if isempty(data_raws), data_raws = data;
@@ -392,21 +392,14 @@ function [stim_table] = stimTableMapper(stim_table, ...
     disp(stim_table.Properties.VariableNames);
 end
 
-function [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
-    % First, check if any stimuli have numeric names and fix them
+    function [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
+    % Fix numeric stimulus names first
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         for j = 1:length(stim_keys)
             key = stim_keys{j};
-            % Check if the key is numeric or starts with a number
-            if ~isempty(str2double(key)) || ...
-                    (~isempty(key) && ~isnan(str2double(key(1))))
-                % Create a new key with 'x' prefix
+            if ~isempty(str2double(key)) || (~isempty(key) && ~isnan(str2double(key(1))))
                 new_key = ['x', key];
-                disp(['Renaming numeric stimulus "', key, '" to "', ...
-                      new_key, '"']);
-                
-                % Get the stimulus and rename it
                 stim = data_raws(i).stimulus(key);
                 stim.name = new_key;
                 data_raws(i).stimulus(key) = [];
@@ -415,358 +408,128 @@ function [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(da
         end
     end
 
-    % NEW CODE - Restructure stimuli if we have fewer stimulus channels than expected condition names
-    events_created = false;
+    % Handle single stimulus with multiple events - split into separate channels
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         
-        % Check if we have a mismatch between number of stimulus channels and expected condition names
-        if length(stim_keys) < length(stim_names) && ~isempty(stim_keys)
-            disp('Detected fewer stimulus channels than expected condition names.');
-            disp('Attempting to restructure stimulus events...');
+        if ~isempty(stim_keys) && length(stim_keys) == 1
+            key = stim_keys{1};
+            stim = data_raws(i).stimulus(key);
             
-            % Look at each existing stimulus channel
-            for j = 1:length(stim_keys)
-                key = stim_keys{j};
-                stim = data_raws(i).stimulus(key);
-                
-                % If this stimulus has multiple events and matches our expected count
-                if stim.count == length(stim_names)
-                    disp(['Found stimulus channel "', key, '" with ', num2str(stim.count), ' events.']);
-                    disp('Creating separate stimulus channels for each condition...');
-                    
-                    % Create a separate stimulus channel for each event
-                    for k = 1:stim.count
-                        new_key = sprintf('event%d', k);
-                        
-                        % Create a new stimulus event with just this single event
-                        new_stim = nirs.design.StimulusEvents();
-                        new_stim.name = new_key;
-                        
-                        % Apply user-specified onset if provided, otherwise use original
-                        if ~isscalar(stim_onset) && length(stim_onset) >= k && ~isnan(stim_onset(k))
-                            new_stim.onset = stim_onset(k);
-                        else
-                            new_stim.onset = stim.onset(k);
-                        end
-                        
-                        % Apply user-specified duration if provided, otherwise use original
-                        if ~isscalar(stim_dur) && length(stim_dur) >= k && ~isnan(stim_dur(k))
-                            new_stim.dur = stim_dur(k);
-                        elseif isscalar(stim_dur) && ~isnan(stim_dur)
-                            new_stim.dur = stim_dur;
-                        else
-                            new_stim.dur = stim.dur(k);
-                        end
-                        
-                        if ~isempty(stim.amp)
-                            new_stim.amp = stim.amp(k);
-                        else
-                            new_stim.amp = 1;
-                        end
-                        
-                        % Add to stimulus collection
-                        data_raws(i).stimulus(new_key) = new_stim;
+            if stim.count > 1
+                for k = 1:stim.count
+                    new_key = sprintf('event%d', k);
+                    new_stim = nirs.design.StimulusEvents();
+                    new_stim.name = new_key;
+                    new_stim.onset = stim.onset(k);
+                    new_stim.dur = stim.dur(k);
+                    if isempty(stim.amp)
+                        new_stim.amp = 1;
+                    else
+                        new_stim.amp = stim.amp(k);
                     end
-                    
-                    % Remove the original combined channels to avoid mapping confusion
-                    for old_key = stim_keys
-                        data_raws(i).stimulus(old_key{1}) = [];
-                    end
-                    
-                    events_created = true;
-                    disp('Successfully created separate stimulus channels.');
-                    break; % We found and processed our target stimulus channel
+                    data_raws(i).stimulus(new_key) = new_stim;
                 end
-            end
-            
-            if events_created
-                % Update keys after removing old ones and adding new ones
-                stim_keys = data_raws(i).stimulus.keys;
-                events_created = false;
+                data_raws(i).stimulus(key) = [];
             end
         end
     end
 
-    % === MODIFIED CODE FOR GROUP ANALYSIS ===
-    % Check if we're dealing with group data by looking at the size of data_raws
-    is_group_analysis = length(data_raws) > 1;
+    % RENAME STIMULI IN data_raws TO GENERIC NAMES (positionally per subject)
+    for i = 1:length(data_raws)
+        stim_keys = sort(data_raws(i).stimulus.keys);
+        
+        % Rename each stimulus to generic marker name based on position
+        for j = 1:length(stim_keys)
+            old_key = stim_keys{j};
+            generic_name = sprintf('marker%02d', j);
+            
+            % Get stimulus, rename it, and reassign
+            stim = data_raws(i).stimulus(old_key);
+            stim.name = generic_name;
+            data_raws(i).stimulus(old_key) = [];
+            data_raws(i).stimulus(generic_name) = stim;
+        end
+    end
     
-    if is_group_analysis
-        disp('Detected group analysis with multiple subjects.');
+    disp('Stimuli renamed to generic marker names in data_raws');
+    
+    % Check if user provided stim_names
+    use_user_names = ~(isscalar(stim_names) && (isnan(stim_names{1}) || strcmpi(stim_names{1}, 'NaN')));
+    
+    if use_user_names
+        % Fix numeric names in user stim_names
+        fixed_stim_names = cell(size(stim_names));
+        for i = 1:length(stim_names)
+            name = stim_names{i};
+            if ~isempty(str2double(name)) || (~isempty(name) && ~isnan(str2double(name(1))))
+                fixed_stim_names{i} = ['x', name];
+            else
+                fixed_stim_names{i} = name;
+            end
+        end
         
-        % For group analysis, we want to use the unique stimulus types
-        % Create a map to track unique stimulus names across all subjects
-        unique_stim_map = containers.Map();
-        
-        % First pass: identify all unique stimulus types across subjects
+        % Rename from generic to user names in data_raws
         for i = 1:length(data_raws)
-            stim_keys = data_raws(i).stimulus.keys;
-            for j = 1:length(stim_keys)
-                key = stim_keys{j};
-                if ~unique_stim_map.isKey(key)
-                    unique_stim_map(key) = 1;
-                else
-                    unique_stim_map(key) = unique_stim_map(key) + 1;
-                end
-            end
-        end
-        
-        % Get unique stimulus names
-        unique_stims = unique_stim_map.keys();
-        
-        % Check if we have 'event' stimuli (from restructuring)
-        event_stims = {};
-        for i = 1:length(unique_stims)
-            if startsWith(unique_stims{i}, 'event')
-                event_stims{end+1} = unique_stims{i}; %#ok<AGROW>
-            end
-        end
-        
-        % Sort event stimuli numerically to maintain order
-        if ~isempty(event_stims)
-            % Extract numbers from event names
-            event_nums = zeros(length(event_stims), 1);
-            for i = 1:length(event_stims)
-                % Get the numeric part of the event name (e.g., 'event1' -> 1)
-                event_num = str2double(regexprep(event_stims{i}, 'event', ''));
-                if ~isnan(event_num)
-                    event_nums(i) = event_num;
-                end
-            end
-            
-            % Sort by event number
-            [~, idx] = sort(event_nums);
-            event_stims = event_stims(idx);
-            
-            disp('Found and sorted event stimuli:');
-            disp(event_stims);
-        end
-        
-        % If we found exactly the number of expected stimulus types, use those directly
-        if length(unique_stims) == length(stim_names)
-            disp('Found exact match of unique stimulus types across subjects.');
-            available_stims = unique_stims;
-        elseif length(event_stims) == length(stim_names)
-            disp('Found matching event stimuli across subjects.');
-            available_stims = event_stims;
-        else
-            % Otherwise, use most common stimulus types up to our expected count
-            stim_counts = zeros(1, length(unique_stims));
-            for i = 1:length(unique_stims)
-                stim_counts(i) = unique_stim_map(unique_stims{i});
-            end
-            
-            [~, idx] = sort(stim_counts, 'descend');
-            
-            % Get the top most frequent stimuli matching our expected count
-            if length(unique_stims) >= length(stim_names)
-                available_stims = unique_stims(idx(1:length(stim_names)));
-            else
-                warning(['Fewer unique stimulus types (%d) found than expected (%d). Using all available.'], ...
-                        length(unique_stims), length(stim_names));
-                available_stims = unique_stims;
-            end
-        end
-        
-        disp('Unique stimuli identified across all subjects:');
-        disp(available_stims);
-    else
-        % Standard case for single-subject processing
-        available_stims = nirs.getStimNames(data_raws);
-        disp('Available stimuli in raw data (after restructuring):');
-        disp(available_stims);
-    end
-    % === END MODIFIED CODE ===
-
-    %-- Handle NaN in stimulus names (leave original names unchanged)
-    use_original_names = false;
-    if isscalar(stim_names) && (isnan(stim_names{1}) || ...
-            strcmpi(stim_names{1}, 'NaN'))
-        use_original_names = true;
-        stim_names_to_use = available_stims;
-        available_stims_to_use = available_stims;
-        disp('Using original stimulus names (NaN provided)');
-    %-- Validate stimulus names
-    elseif length(stim_names) ~= length(available_stims)
-        warning(['Number of provided stimulus names (%d) does not ' ...
-                 'match available stimuli (%d)'], ...
-                length(stim_names), length(available_stims));
-        
-        % === MODIFIED CODE ===
-        % For group analysis with mismatched counts, be more flexible
-        if is_group_analysis
-            disp('Attempting to match stimulus names for group analysis...');
-            
-            % If we have more stimuli than names, take subset of stimuli
-            if length(available_stims) > length(stim_names)
-                mapping_length = length(stim_names);
-                available_stims_to_use = available_stims(1:mapping_length);
-                stim_names_to_use = stim_names;
+            current_keys = data_raws(i).stimulus.keys;
+            for j = 1:min(length(fixed_stim_names), length(current_keys))
+                generic_name = sprintf('marker%02d', j);
+                user_name = fixed_stim_names{j};
                 
-                disp('Using first available stimuli to match expected names:');
-                for i = 1:mapping_length
-                    disp(['  ' available_stims_to_use{i} ' -> ' stim_names_to_use{i}]);
-                end
-            else
-                % If we have fewer stimuli than names, use all available stimuli
-                mapping_length = length(available_stims);
-                available_stims_to_use = available_stims;
-                stim_names_to_use = stim_names(1:mapping_length);
-                
-                disp('Using available stimuli with subset of expected names:');
-                for i = 1:mapping_length
-                    disp(['  ' available_stims_to_use{i} ' -> ' stim_names_to_use{i}]);
+                % Check if generic_name exists in current keys
+                if ismember(generic_name, current_keys)
+                    stim = data_raws(i).stimulus(generic_name);
+                    stim.name = user_name;
+                    data_raws(i).stimulus(generic_name) = [];
+                    data_raws(i).stimulus(user_name) = stim;
                 end
             end
-        else
-            % Original behavior for non-group analysis
-            mapping_length = min(length(stim_names), length(available_stims));
-            stim_names_to_use = stim_names(1:mapping_length);
-            available_stims_to_use = available_stims(1:mapping_length);
         end
-        % === END MODIFIED CODE ===
+        
+        final_names = fixed_stim_names;
+        disp('Stimuli renamed to user-provided names in data_raws');
     else
-        stim_names_to_use = stim_names;
-        available_stims_to_use = available_stims;
-    end
-
-    %-- Handle NaN in onsets/durations
-    use_original_onsets = false;
-    if isscalar(stim_onset) && isnan(stim_onset)
-        use_original_onsets = true;
-        disp('Using original stimulus onsets (NaN provided)');
+        % Keep generic names
+        final_names = {};
+        for i = 1:length(data_raws(1).stimulus.keys)
+            final_names{i} = sprintf('marker%02d', i);
+        end
     end
     
-    use_original_durs = false;
-    if isscalar(stim_dur) && isnan(stim_dur)
-        use_original_durs = true;
-        disp('Using original stimulus durations (NaN provided)');
+    % Create rename_mapping for reference
+    rename_mapping = cell(length(final_names), 2);
+    for i = 1:length(final_names)
+        rename_mapping{i, 1} = sprintf('marker%02d', i);
+        rename_mapping{i, 2} = final_names{i};
     end
+    
+    disp('Final stimulus mapping:');
+    disp(rename_mapping);
 
-    %-- Ensure stimulus durations match if not using originals and not already handled during restructuring
-    if ~use_original_durs && ~events_created
-        if length(stim_dur) == 1
-            stim_dur = repmat(stim_dur, 1, length(stim_names_to_use));
-        elseif length(stim_dur) ~= length(stim_names_to_use)
-            warning(['Length of stimulus durations (%d) does not ',...
-                     'match number of stimuli (%d). Adjusting...'], ...
-                length(stim_dur), length(stim_names_to_use));
-            if length(stim_dur) > length(stim_names_to_use)
-                stim_dur = stim_dur(1:length(stim_names_to_use));
-            else
-                default_dur = stim_dur(end);
-                stim_dur = [stim_dur, repmat(default_dur, 1, ...
-                    length(stim_names_to_use) - length(stim_dur))];
-            end
-        end
-    end
-
-    % Create stimulus table with detailed logging
-    try
-        disp('Creating stimulus table...');
-        
-        % Get original stimulus table
-        orig_stim_table = nirs.createStimulusTable(data_raws);
-        
-    % If using original names, onsets, and durations, just return the original
-    if use_original_names && use_original_onsets && use_original_durs
+    % Now create stimulus table (columns will already have correct names)
+    orig_stim_table = nirs.createStimulusTable(data_raws);
+    
+    % Apply onset/duration if needed
+    if (isscalar(stim_onset) && isnan(stim_onset)) && (isscalar(stim_dur) && isnan(stim_dur))
         mod_stimTable = orig_stim_table;
-        disp('Using original stimulus table (all parameters are NaN)');
     else
-        % Otherwise, call the mapper with the appropriate values
-        if use_original_names
-            if use_original_onsets
-                onset_to_use = NaN;
-            else
-                onset_to_use = stim_onset;
-            end
-            
-            if use_original_durs
-                dur_to_use = NaN;
-            else
-                dur_to_use = stim_dur;
-            end
-            
-            mod_stimTable = stimTableMapper(orig_stim_table, ...
-                available_stims, onset_to_use, dur_to_use);
+        if isscalar(stim_onset) && isnan(stim_onset)
+            onset_to_use = NaN;
         else
-            % When not using original names
-            if use_original_onsets
-                onset_to_use = NaN;
-            else
-                onset_to_use = stim_onset;
-            end
-            
-            if use_original_durs
-                dur_to_use = NaN;
-            else
-                dur_to_use = stim_dur;
-            end
-            
-            mod_stimTable = stimTableMapper(orig_stim_table, ...
-                stim_names_to_use, onset_to_use, dur_to_use);
-        end
-    end
-        
-        % Create mapping
-        if use_original_names
-            % If using original names, create identity mapping
-            rename_mapping = cell(length(available_stims), 2);
-            for i = 1:length(available_stims)
-                rename_mapping{i, 1} = available_stims{i};
-                rename_mapping{i, 2} = available_stims{i};
-            end
-        else
-            % Create mapping with proper validation
-            rename_mapping = cell(length(available_stims_to_use), 2);
-            
-            % For event-based stimuli, we need to preserve numeric order
-            if is_group_analysis && all(cellfun(@(x) startsWith(x, 'event'), available_stims_to_use))
-                % Extract event numbers for sorting
-                event_nums = zeros(length(available_stims_to_use), 1);
-                for i = 1:length(available_stims_to_use)
-                    event_nums(i) = str2double(regexprep(available_stims_to_use{i}, 'event', ''));
-                end
-                
-                % Sort by event number
-                [~, idx] = sort(event_nums);
-                sorted_stims = available_stims_to_use(idx);
-                
-                % Create mapping in sorted order
-                for i = 1:length(sorted_stims)
-                    rename_mapping{i, 1} = sorted_stims{i};
-                    if i <= length(stim_names_to_use)
-                        rename_mapping{i, 2} = stim_names_to_use{i};
-                    else
-                        rename_mapping{i, 2} = sorted_stims{i};
-                    end
-                end
-                
-                disp('Created stimulus mapping with numerical ordering:');
-                disp(rename_mapping);
-            else
-                % Standard mapping for non-event stimuli
-                for i = 1:length(available_stims_to_use)
-                    rename_mapping{i, 1} = available_stims_to_use{i};
-                    if i <= length(stim_names_to_use)
-                        rename_mapping{i, 2} = stim_names_to_use{i};
-                    else
-                        rename_mapping{i, 2} = available_stims_to_use{i};
-                    end
-                end
-            end
+            onset_to_use = stim_onset;
         end
         
-        % Log the renaming mapping
-        disp('Stimulus renaming mapping:');
-        disp(rename_mapping);
-    catch e
-    disp(['Error in stimulus table creation: ' e.message]);
-    disp('Stimulus table creation failed, attempting fallback method...');
-    mod_stimTable = table();
-    rename_mapping = {};
+        if isscalar(stim_dur) && isnan(stim_dur)
+            dur_to_use = NaN;
+        else
+            dur_to_use = stim_dur;
+        end
+        
+        mod_stimTable = stimTableMapper(orig_stim_table, final_names, onset_to_use, dur_to_use);
     end
+    
+    disp('Final stimulus table columns:');
+    disp(mod_stimTable.Properties.VariableNames);
 end
 % _________________________________________________________________________
 end
