@@ -1,7 +1,6 @@
 function [GroupStats, demograph, stimulus] ...
     = fNIRS_Process(load_path, nirstoolbox_path, user_vars)
 % fNIRS_Process - Main processing core for fNIRS pipeline.
-% VERSION_ID = 6.5.2
 % 
 % Options: 
 %     load_path        - path to fNIRS file or folder system
@@ -29,7 +28,7 @@ defaults.do_preprocessing   = true;
 %--Validating user variables, setting to default if variable not present
 user_vars = validateAnalyticParameters(user_vars, defaults);
 %-- Solo or directory data loading ( data_raws.probe.draw )
-data_raws = loadNIRSData(load_path, user_vars);
+data_raws = loadNIRSData(load_path);
 % _________________________________________________________________________
 
 % Stimulus correction _____________________________________________________
@@ -53,35 +52,15 @@ job = nirs.modules.LabeltooLongDistance (job);
 job.min_distance = user_vars.max_regul_distance;
 job = nirs.modules.RemovetooLongDistance(job);
 % _________________________________________________________________________
-% data_raws = job.run(data_raws);
-% job_qt = nirs.modules.QT();
-% job_qt.qThreshold = 0.6;
-% qt_results = job_qt.run(data_raws);
-% % Apply bad channel info back to data
-% for i = 1:length(data_raws)
-%     bad_idx = qt_results(i).qMats.bad_links;
-%     if ~isempty(bad_idx)
-%         % Get the link table for bad channels
-%         bad_src = qt_results(i).qMats.good_combo_link(bad_idx, 1);
-%         bad_det = qt_results(i).qMats.good_combo_link(bad_idx, 2);
-% 
-%         % Find matching channels in data (both wavelengths/types)
-%         link = data_raws(i).probe.link;
-%         for j = 1:length(bad_src)
-%             mask = link.source == bad_src(j) & link.detector == bad_det(j);
-%             data_raws(i).data(:, mask) = NaN;
-%         end
-%     end
-%     fprintf('Subject %d: %d bad channels marked\n', i, length(bad_idx));
-% end
 
 % Transform to physiological data _________________________________________
 job = nirs.modules.OpticalDensity       (job);
-job = nirs.modules.TDDR(job);
 job = nirs.modules.BeerLambertLaw       (job);
 %-- Apply preprocessing if necessary
-if user_vars.do_preprocessing, data_prps = job.run(data_raws);
-else,                          data_prps = data_raws;
+if user_vars.do_preprocessing
+    data_prps = job.run(data_raws);
+else
+    data_prps = data_raws;
 end
 % Calculate total hemoglobin - INDEV
 if user_vars.calculate_total_hb
@@ -91,20 +70,18 @@ if user_vars.calculate_total_hb
     end
 end
 % _________________________________________________________________________
+
 % Motion correction (Auto-regressive Iteratively Reweighted Least Squares)_
 % Barker, J. W., Aarabi, A., & Huppert, T. J. (2013). 
 % Autoregressive model based algorithm for correcting motion and serially 
 % correlated errors in fNIRS. Biomedical optics express, 4(8), 1366–1379. 
 % https://doi.org/10.1364/BOE.4.001366
-job = nirs.modules.GLM                  (); 
-job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
+job = nirs.modules.GLM                  ();
 if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
        any(data_prps(1).probe.link.ShortSeperation == 1)
     job.AddShortSepRegressors = true;
-    job = nirs.modules.RemoveShortSeperations(job);
-else
-    job = nirs.modules.RemoveShortSeperations(job);
 end
+job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
 data_stat = job.run(data_prps);
 % _________________________________________________________________________
 
@@ -122,101 +99,60 @@ for iter = 1:length(user_vars.regression_formula)
     disp(GroupStats(iter).conditions)
 end
 % _________________________________________________________________________
+
+% Save preprocessed data as .snirf ________________________________________
+if user_vars.save_as_snirf_flag == true
+    saveAsSNIRF(data_prps, demograph, load_path, ...
+        user_vars.overwrite_as_snirf)
+end
 disp('Finished processing data.')
 % _________________________________________________________________________
 
 % Auxillary functions _____________________________________________________
-function data_raws = loadNIRSData(load_path, user_vars)
-    % -- user specified: directory
+function data_raws = loadNIRSData(load_path)
+    % Check if the input is a directory or a file
     if isfolder(load_path)
+        % It's a directory - check what kind of files it contains
+        snirf_files = dir(fullfile(load_path, '**','*.snirf'));
+        nirx_files = dir(fullfile(load_path, '**','*.wl1'));
         
-        % Check low-level directories
-        leaf_dirs = getLeafDirs(load_path);
-        if isempty(leaf_dirs)
-            leaf_dirs{1} = load_path;
-        end
-
-        % Gather supported files
-        loadable_dirs = {};  file_types = {};
-        for i = 1:length(leaf_dirs)
-            dir_path = leaf_dirs{i};
-            
-            % :: .snirf
-            snirf_files = dir(fullfile(dir_path, '*.snirf'));
-            if ~isempty(snirf_files)
-                loadable_dirs{end+1} = dir_path;
-                file_types{end+1} = 'snirf';
-                continue;
-            end
-            
-            % :: NIRx
-            wl1_files = dir(fullfile(dir_path, '*.wl1'));
-            if ~isempty(wl1_files)
-                loadable_dirs{end+1} = dir_path; %#ok<*AGROW>
-                file_types{end+1} = 'nirx';
-            end
-        end
-        if isempty(loadable_dirs)
-        error('No valid data files found in: %s', load_path); end
-        
-        % Load valid files
-        data_raws = [];
-        for i = 1:length(loadable_dirs)
-            % -- set iterable directory
-            dir_path = loadable_dirs{i}; file_type = file_types{i};
-            fprintf('[%d/%d] Loading: %s\n', i, length(loadable_dirs), dir_path);
-            
-            try
-            % -- load file
-            if strcmp(file_type, 'snirf')
-                snirf_files = dir(fullfile(dir_path, '*.snirf'));
-                data = nirs.io.loadSNIRF(fullfile(dir_path, snirf_files(1).name));
+        % Case 1: Directory contains SNIRF files
+        if ~isempty(snirf_files)
+            if isscalar(snirf_files)
+                % Single SNIRF file in directory
+                data_raws = nirs.io.loadSNIRF(fullfile(load_path, ...
+                                              snirf_files(1).name));
             else
-                data = nirs.io.loadNIRx(dir_path);
+                % Multiple SNIRF files in directory
+                data_raws = nirs.io.loadDirectory(load_path, ...
+                    user_vars.folder_structure, ...
+                    @nirs.io.loadSNIRF, {'.snirf'});
             end
-            
-            % -- extract file tree demographics
-            demographics = extractDemographics(dir_path, load_path, ...
-                                             user_vars.folder_structure);
-            
-            % -- assign demographics to data
-            if ~isempty(fieldnames(demographics))
-                demo_fields = fieldnames(demographics);
-                for j = 1:length(demo_fields)
-                    field = demo_fields{j};
-                    data.demographics(field) = demographics.(field);
-                end
+        
+        % Case 2: Directory contains NIRx files (.wl1)
+        elseif ~isempty(nirx_files)
+            if isscalar(nirx_files)
+                % Single NIRx dataset in directory
+                data_raws = nirs.io.loadNIRx(load_path);
+            else
+                % Multiple NIRx datasets in sub-directories
+                data_raws = nirs.io.loadDirectory(load_path, ...
+                    user_vars.folder_structure, ...
+                    @nirs.io.loadNIRx, {'.wl1'});
             end
-            
-            % -- assign description to data
-            data.description = [dir_path, '/', file_type];
-            
-            % -- append to master array
-            if isempty(data_raws), data_raws = data;
-            else, data_raws(end+1) = data; end
-                
-            catch e
-                warning('Error loading %s: %s', dir_path, e.message);
-                fprintf('  Stack trace:\n');
-                for k = 1:length(e.stack)
-                    fprintf('    %s (line %d)\n', e.stack(k).name, e.stack(k).line);
-                end
-            end
+        
+        % Case 3: Unknown file type or empty directory
+        else
+            error('No supported NIRS data files found in directory');
         end
-        if isempty(data_raws)
-        error('Failed to load any NIRS data from: %s', load_path); end
-
-        % Convert to column vector (ref. nirs.io.loadDirectory)
-        data_raws = data_raws(:);
-
-    % -- user specified: file
+    
+    % It's a file path - determine file type and load accordingly
     elseif isfile(load_path)
         [~, ~, ext] = fileparts(load_path);
-        % -- file is snirf file
         if strcmpi(ext, '.snirf')
             data_raws = nirs.io.loadSNIRF(load_path);
-        % -- file is NIRx file
         elseif strcmpi(ext, '.wl1')
+            % For .wl1 files, we need the parent directory
             [parent_dir, ~, ~] = fileparts(load_path);
             data_raws = nirs.io.loadNIRx(parent_dir);
         else
@@ -227,31 +163,31 @@ function data_raws = loadNIRSData(load_path, user_vars)
     end
 end
 
-function demographics = extractDemographics(data_p,root_path,folder_struct)
-    demographics = struct();
-    % -- get rel. path from data root & remove leading/trailing filesep(s)
-    if isempty(folder_struct), return; end
-    rpath = strrep(data_p, root_path, '');
-    rpath = regexprep(rpath, '^[/\\]+|[/\\]+$', '');
-    
-    % -- split into folder levels & remove empty entries
-    folder_levels = strsplit(rpath, filesep);
-    folder_levels = folder_levels(~cellfun(@isempty, folder_levels));
-    if isempty(folder_levels), return; end
-  
-    num_to_assign = min(length(folder_levels), length(folder_struct));
-    relevant_folders = folder_levels(end - num_to_assign + 1:end);
-    relevant_structure = folder_struct(end - num_to_assign + 1:end);
-    
-    % -- assign demographics
-    for i = 1:num_to_assign
-        field_name = relevant_structure{i};
-        folder_value = relevant_folders{i};
-        demographics.(field_name) = folder_value;
+function saveAsSNIRF(data, demo, load_path, overwrite)
+    for i=1:length(data)
+    visitID = '';
+    if ismember('Visit',demo.Properties.VariableNames)
+        visitID = strcat('_V',demo.Visit(i));
+    end
+    save_name = fullfile(load_path,[demo.Name{i},visitID{:},...
+                            '.snirf']);
+    if isfile(save_name) && ~overwrite
+        validate =input('File already exists. Overwrite? [[y]/n]',"s");
+        if isequal(lower(validate),'y') | isempty(validate)
+            delete(save_name)
+            nirs.io.saveSNIRF(data(i,1),save_name)
+            disp(['Saved ',save_name,'.']);
+        else
+            disp(['Discarded ',demo.Name{i},'.snirf.']);
+        end
+    else
+        nirs.io.saveSNIRF(data(i,1),save_name)
+        disp(['[',num2str(i),']',' Saved ',save_name,'.']);
+    end
     end
 end
 
-function params       = validateAnalyticParameters(params, defaults)
+function params = validateAnalyticParameters(params, defaults)
     if ~exist('user_vars', 'var') || ~isa(params, 'struct')
         params = struct();
     end
@@ -390,14 +326,21 @@ function [stim_table] = stimTableMapper(stim_table, ...
 end
 
 function [data_raws, mod_stimTable, rename_mapping] = ...
-        createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
-    % Fix numeric stimulus names first
+    createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
+    % First, check if any stimuli have numeric names and fix them
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         for j = 1:length(stim_keys)
             key = stim_keys{j};
-            if ~isempty(str2double(key)) || (~isempty(key) && ~isnan(str2double(key(1))))
+            % Check if the key is numeric or starts with a number
+            if ~isempty(str2double(key)) || ...
+                    (~isempty(key) && ~isnan(str2double(key(1))))
+                % Create a new key with 'x' prefix
                 new_key = ['x', key];
+                disp(['Renaming numeric stimulus "', key, '" to "', ...
+                      new_key, '"']);
+                
+                % Get the stimulus and rename it
                 stim = data_raws(i).stimulus(key);
                 stim.name = new_key;
                 data_raws(i).stimulus(key) = [];
@@ -406,123 +349,141 @@ function [data_raws, mod_stimTable, rename_mapping] = ...
         end
     end
 
-    % Handle single stimulus with multiple events - split into separate channels
-    for i = 1:length(data_raws)
-        stim_keys = data_raws(i).stimulus.keys;
-        
-        if ~isempty(stim_keys) && isscalar(stim_keys)
-            key = stim_keys{1};
-            stim = data_raws(i).stimulus(key);
-            
-            if stim.count > 1
-                for k = 1:stim.count
-                    new_key = sprintf('event%d', k);
-                    new_stim = nirs.design.StimulusEvents();
-                    new_stim.name = new_key;
-                    new_stim.onset = stim.onset(k);
-                    new_stim.dur = stim.dur(k);
-                    if isempty(stim.amp)
-                        new_stim.amp = 1;
-                    else
-                        new_stim.amp = stim.amp(k);
-                    end
-                    data_raws(i).stimulus(new_key) = new_stim;
-                end
-                data_raws(i).stimulus(key) = [];
-            end
-        end
+    %-- Check available stimuli first
+    available_stims = nirs.getStimNames(data_raws);
+    disp('Available stimuli in raw data (after fixing numeric names):');
+    disp(available_stims);
+
+    %-- Handle NaN in stimulus names (leave original names unchanged)
+    use_original_names = false;
+    if isscalar(stim_names) && (isnan(stim_names{1}) || ...
+            strcmpi(stim_names{1}, 'NaN'))
+        use_original_names = true;
+        stim_names_to_use = available_stims;
+        available_stims_to_use = available_stims;
+        disp('Using original stimulus names (NaN provided)');
+    %-- Validate stimulus names
+    elseif length(stim_names) ~= length(available_stims)
+        warning(['Number of provided stimulus names (%d) does not' ...
+                 'match available stimuli (%d)'], ...
+                length(stim_names), length(available_stims));
+        % Create mapping only for available stimuli or expected stimuli
+        mapping_length = min(length(stim_names), length(available_stims));
+        stim_names_to_use = stim_names(1:mapping_length);
+        available_stims_to_use = available_stims(1:mapping_length);
+    else
+        stim_names_to_use = stim_names;
+        available_stims_to_use = available_stims;
     end
 
-    % RENAME STIMULI IN data_raws TO GENERIC NAMES (positionally per subject)
-    for i = 1:length(data_raws)
-        stim_keys = sort(data_raws(i).stimulus.keys);
-        
-        % Rename each stimulus to generic marker name based on position
-        for j = 1:length(stim_keys)
-            old_key = stim_keys{j};
-            generic_name = sprintf('marker%02d', j);
-            
-            % Get stimulus, rename it, and reassign
-            stim = data_raws(i).stimulus(old_key);
-            stim.name = generic_name;
-            data_raws(i).stimulus(old_key) = [];
-            data_raws(i).stimulus(generic_name) = stim;
-        end
+    %-- Handle NaN in onsets/durations
+    use_original_onsets = false;
+    if isscalar(stim_onset) && isnan(stim_onset)
+        use_original_onsets = true;
+        disp('Using original stimulus onsets (NaN provided)');
     end
     
-    % Check if user provided stim_names
-    use_user_names = ~(isscalar(stim_names) && (isnan(stim_names{1}) || strcmpi(stim_names{1}, 'NaN')));
-    
-    if use_user_names
-        % Fix numeric names in user stim_names
-        fixed_stim_names = cell(size(stim_names));
-        for i = 1:length(stim_names)
-            name = stim_names{i};
-            if ~isempty(str2double(name)) || (~isempty(name) && ~isnan(str2double(name(1))))
-                fixed_stim_names{i} = ['x', name];
+    use_original_durs = false;
+    if isscalar(stim_dur) && isnan(stim_dur)
+        use_original_durs = true;
+        disp('Using original stimulus durations (NaN provided)');
+    end
+
+    %-- Ensure stimulus durations match if not using originals
+    if ~use_original_durs
+        if length(stim_dur) == 1
+            stim_dur = repmat(stim_dur, 1, length(stim_names_to_use));
+        elseif length(stim_dur) ~= length(stim_names_to_use)
+            warning(['Length of stimulus durations (%d) does not',...
+                     'match number of stimuli (%d). Adjusting...'], ...
+                length(stim_dur), length(stim_names_to_use));
+            if length(stim_dur) > length(stim_names_to_use)
+                stim_dur = stim_dur(1:length(stim_names_to_use));
             else
-                fixed_stim_names{i} = name;
+                default_dur = stim_dur(end);
+                stim_dur = [stim_dur, repmat(default_dur, 1, ...
+                    length(stim_names_to_use) - length(stim_dur))];
             end
         end
+    end
+
+    % Create stimulus table with detailed logging
+    try
+        disp('Creating stimulus table...');
         
-        % Rename from generic to user names in data_raws
-        for i = 1:length(data_raws)
-            current_keys = data_raws(i).stimulus.keys;
-            for j = 1:min(length(fixed_stim_names), length(current_keys))
-                generic_name = sprintf('marker%02d', j);
-                user_name = fixed_stim_names{j};
-                
-                % Check if generic_name exists in current keys
-                if ismember(generic_name, current_keys)
-                    stim = data_raws(i).stimulus(generic_name);
-                    stim.name = user_name;
-                    data_raws(i).stimulus(generic_name) = [];
-                    data_raws(i).stimulus(user_name) = stim;
+        % Get original stimulus table
+        orig_stim_table = nirs.createStimulusTable(data_raws);
+        
+    % If using original names, onsets, and durations, just return the og
+    if use_original_names && use_original_onsets && use_original_durs
+        mod_stimTable = orig_stim_table;
+        disp('Using original stimulus table (all parameters are NaN)');
+    else
+        % Otherwise, call the mapper with the appropriate values
+        if use_original_names
+            if use_original_onsets
+                onset_to_use = NaN;
+            else
+                onset_to_use = stim_onset;
+            end
+            
+            if use_original_durs
+                dur_to_use = NaN;
+            else
+                dur_to_use = stim_dur;
+            end
+            
+            mod_stimTable = stimTableMapper(orig_stim_table, ...
+                available_stims, onset_to_use, dur_to_use);
+        else
+            % When not using original names
+            if use_original_onsets
+                onset_to_use = NaN;
+            else
+                onset_to_use = stim_onset;
+            end
+            
+            if use_original_durs
+                dur_to_use = NaN;
+            else
+                dur_to_use = stim_dur;
+            end
+            
+            mod_stimTable = stimTableMapper(orig_stim_table, ...
+                stim_names_to_use, onset_to_use, dur_to_use);
+        end
+    end
+        
+        % Create mapping
+        if use_original_names
+            % If using original names, create identity mapping
+            rename_mapping = cell(length(available_stims), 2);
+            for i = 1:length(available_stims)
+                rename_mapping{i, 1} = available_stims{i};
+                rename_mapping{i, 2} = available_stims{i};
+            end
+        else
+            % Create mapping with proper validation
+            rename_mapping = cell(length(available_stims_to_use), 2);
+            for i = 1:length(available_stims_to_use)
+                rename_mapping{i, 1} = available_stims_to_use{i};
+                if i <= length(stim_names_to_use)
+                    rename_mapping{i, 2} = stim_names_to_use{i};
+                else
+                    rename_mapping{i, 2} = available_stims_to_use{i};
                 end
             end
         end
         
-        final_names = fixed_stim_names;
-    else
-        % Keep generic names
-        final_names = {};
-        for i = 1:length(data_raws(1).stimulus.keys)
-            final_names{i} = sprintf('marker%02d', i);
-        end
+        % Log the renaming mapping
+        disp('Stimulus renaming mapping:');
+        disp(rename_mapping);
+    catch e
+    disp(['Error in stimulus table creation: ' e.message]);
+    disp('Stimulus table creation failed, attempting fallback method...');
+    mod_stimTable = table();
+    rename_mapping = {};
     end
-    
-    % Create rename_mapping for reference
-    rename_mapping = cell(length(final_names), 2);
-    for i = 1:length(final_names)
-        rename_mapping{i, 1} = sprintf('marker%02d', i);
-        rename_mapping{i, 2} = final_names{i};
-    end
-    
-    disp('Final stimulus mapping:');
-    disp(rename_mapping);
-
-    % Now create stimulus table (columns will already have correct names)
-    orig_stim_table = nirs.createStimulusTable(data_raws);
-    
-    % Apply onset/duration if needed
-    if (isscalar(stim_onset) && isnan(stim_onset)) ...
-        && (isscalar(stim_dur) && isnan(stim_dur))
-        mod_stimTable = orig_stim_table;
-    else
-        if isscalar(stim_onset) && isnan(stim_onset), onset_to_use = NaN;
-        else,                                         onset_to_use = stim_onset;
-        end
-        
-        if isscalar(stim_dur) && isnan(stim_dur), dur_to_use = NaN;
-        else,                                     dur_to_use = stim_dur;
-        end
-        
-        mod_stimTable = stimTableMapper(orig_stim_table, final_names, ...
-                                        onset_to_use, dur_to_use);
-    end
-    
-    disp('Final stimulus table columns:');
-    disp(mod_stimTable.Properties.VariableNames);
 end
 % _________________________________________________________________________
 end

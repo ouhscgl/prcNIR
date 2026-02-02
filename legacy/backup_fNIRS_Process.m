@@ -32,6 +32,42 @@ user_vars = validateAnalyticParameters(user_vars, defaults);
 data_raws = loadNIRSData(load_path, user_vars);
 % _________________________________________________________________________
 
+% Probe label unification _________________________________________________
+% -- find NIRScout origin data
+if user_vars.apply_dataset_merge
+hasn = find(cellfun(@(x) ~endsWith(x, 'snirf'), {data_raws.description}));
+
+% -- defined dictionary (don't f-ing touch this I beg on my knees)
+SRC_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+SRC_N = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
+DET_O = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+DET_N = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6]; % this 16 is fake and will be removed
+
+% -- label reassignment surgery
+src_map = containers.Map(SRC_O, SRC_N);
+det_map = containers.Map(DET_O, DET_N);
+for d = hasn
+    % -- re-label probe
+    [data_raws(d).probe, link_perm, bad_mask] = relabel_probe(...
+        data_raws(d).probe, src_map, det_map, 16);
+    
+    % -- re-label data
+    if ~isempty(link_perm) && ~isempty(data_raws(d).data)
+        data_raws(d).data = data_raws(d).data(:, link_perm);
+    end
+end
+% _________________________________________________________________________
+
+% Sample rate correction __________________________________________________
+rs_min  = min([data_raws.Fs]);
+rs_flag = any(abs([data_raws.Fs] - rs_min) > 0.5);
+if rs_flag
+    job = nirs.modules.Resample(); job.Fs = rs_min;
+    data_raws = job.run(data_raws);
+end
+end
+% _________________________________________________________________________
+
 % Stimulus correction _____________________________________________________
 %-- Change stimulus data ( nirs.getStimNames(data_raws) );
 job = nirs.modules.ChangeStimulusInfo   ();
@@ -96,7 +132,7 @@ end
 % Autoregressive model based algorithm for correcting motion and serially 
 % correlated errors in fNIRS. Biomedical optics express, 4(8), 1366–1379. 
 % https://doi.org/10.1364/BOE.4.001366
-job = nirs.modules.GLM                  (); 
+job = nirs.modules.GLM                  ();
 job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
 if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
        any(data_prps(1).probe.link.ShortSeperation == 1)
@@ -112,6 +148,46 @@ data_stat = job.run(data_prps);
 demograph = nirs.createDemographicsTable(data_prps);
 stimulus  = nirs.createStimulusTable(data_prps);
 % _________________________________________________________________________
+
+if user_vars.apply_dataset_merge
+% Channel alignment across subjects ______________________________________
+% Find common channels across all subjects
+n_subjects = length(data_stat); all_channels = cell(n_subjects, 1);
+for s = 1:n_subjects
+    % -- create unique identifiers
+    vars = data_stat(s).variables;
+    
+    % -- create detector filter mask (exclude detector >= 17)
+    det_mask = vars.detector < 17;
+    
+    % -- filter variables table first
+    vars_filtered = vars(det_mask, :);
+    
+    % -- create channel IDs from filtered variables
+    channel_ids = strcat( ...
+        string(vars_filtered.source),'_',string(vars_filtered.detector),'_', ...
+        string(vars_filtered.type), '_', string(vars_filtered.cond));
+    all_channels{s} = channel_ids;
+end
+% -- find all common channels
+common = all_channels{1};
+for p=2:n_subjects, common=intersect(common, all_channels{p}, 'stable');end
+% -- apply mask to each field
+for p = 1:n_subjects
+    vars = data_stat(p).variables;
+    
+    channel_ids = strcat( ...
+        string(vars.source),'_',string(vars.detector),'_', ...
+        string(vars.type), '_', string(vars.cond));
+    common_mask = ismember(channel_ids, common);
+    
+    % -- combine both masks
+    mask = common_mask;
+    data_stat(p).variables  = data_stat(p).variables(mask, :);
+    data_stat(p).beta       = data_stat(p).beta(mask);
+    data_stat(p).covb       = data_stat(p).covb(mask, mask);
+end
+end
 
 % Statistical analysis (Mixed Effects Model, Wilkinson notation) __________
 job = nirs.modules.MixedEffects         ();
@@ -152,7 +228,7 @@ function data_raws = loadNIRSData(load_path, user_vars)
             % :: NIRx
             wl1_files = dir(fullfile(dir_path, '*.wl1'));
             if ~isempty(wl1_files)
-                loadable_dirs{end+1} = dir_path; %#ok<*AGROW>
+                loadable_dirs{end+1} = dir_path;
                 file_types{end+1} = 'nirx';
             end
         end
@@ -410,7 +486,7 @@ function [data_raws, mod_stimTable, rename_mapping] = ...
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         
-        if ~isempty(stim_keys) && isscalar(stim_keys)
+        if ~isempty(stim_keys) && length(stim_keys) == 1
             key = stim_keys{1};
             stim = data_raws(i).stimulus(key);
             

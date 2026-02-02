@@ -1,4 +1,4 @@
-function fNIRS_visualize_probe(probe)
+function visualizeFnirsProbe(probe)
 % -- re-define variables
 [srcPos, detPos, links] = deal(probe.srcPos, probe.detPos, probe.link);
 

@@ -412,9 +412,18 @@ function saveContrastTable(ContrastStatsTable, currentContrast)
     else
         op = '';
     end
-    writetable(ContrastStatsTable, [od filesep op CST_name,'.csv'])
-    disp(['Saved contrast to:', od filesep op CST_name,'.csv.'])
+    try
+        writetable(ContrastStatsTable, [od filesep op sanitizeFilename(CST_name),'.csv'])
+    catch
+    disp(['NotSaved contrast to:', od filesep op sanitizeFilename(CST_name),'.csv.'])
+    end
+    disp(['Saved contrast to:', od filesep op sanitizeFilename(CST_name),'.csv.'])
 end
+
+    function safeName = sanitizeFilename(name)
+        safeName = regexprep(name, '[/\\:*?"<>|]', '_');
+        safeName = regexprep(safeName, '_+', '_');  % collapse multiple underscores
+    end
 
     function saveContrastFigure(type, extension)
     figHandles = findall(0, 'Type', 'figure');
