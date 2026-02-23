@@ -15,7 +15,7 @@ function leaf_paths = getLeafs(base_path)
                        ~ismember({current_subs.name}, {'.','..'}));
         
         if isempty(current_subs)
-            leaf_paths{end+1} = current_path;
+            leaf_paths{end+1} = current_path; %#ok<*AGROW>
         else
             deeper_leaves = getLeafs(current_path);
             leaf_paths = [leaf_paths, deeper_leaves];

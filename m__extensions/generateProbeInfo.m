@@ -14,9 +14,9 @@ function probeInfo = generateProbeInfo(links, geoms, options)
 %   OutputFile - If provided, saves probeInfo.mat to this path
 
 arguments
-    links      (1,1) string = ""
-    geoms      (1,1) string = ""
-    options.nDet (1,1) double {mustBeInRange(options.nDet,0,24)} = 0
+    links              (1,1) string = ""
+    geoms              (1,1) string = ""
+    options.nDet       (1,1) double {mustBeInRange(options.nDet,0,24)} = 0
     options.OutputFile (1,1) string = ""
 end
 

@@ -3,10 +3,6 @@ function [probe_new, link_permutation, bad_channels_mask] = relabel_probe(probe_
 %
 % This is NOT A STANDALONE script and should be used within the scope of 
 % fNIRS_Process.
-%
-% Inputs:
-%   remove_sd_pairs - Nx2 matrix of [source, detector] pairs to remove
-%                     Default: [3,4; 10,11]
 
 if nargin < 4, remove_detector = []; end
 if nargin < 5, remove_sd_pairs = [3,4; 10,11]; end

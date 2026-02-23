@@ -85,7 +85,6 @@ else
 end
 
 %% Step.04: Update markers
-% Note: marker functions handle snirf/hdr priority internally, so pass all leafs
 switch options.RevisedMarkers
     case ""
         fprintf('[4/5]: Skipping marker processing...\n');
@@ -113,7 +112,7 @@ for leaf = 1:length(hdrLeafs)
     logRowCounter = logRowCounter + 1;
     
     % Initialize row with folder name
-    currentRow = cell(1, length(reqExts) + 4); % Folder + reqExts + SnirfFile + Export
+    currentRow = cell(1, length(reqExts) + 4);
     currentRow{1} = folderName;
     currentRow{2} = dir(fullfile(hdrLeafs{leaf}, ['*' '.hdr'])).name;
     
@@ -161,7 +160,7 @@ for leaf = 1:length(snirfLeafs)
         companionCsv = fullfile(snirfLeafs{leaf}, [snirfBase '.csv']);
         
         logRowCounter = logRowCounter + 1;
-        currentRow = cell(1, length(reqExts) + 4); % Folder + reqExts + SnirfFile + Export
+        currentRow = cell(1, length(reqExts) + 4);
         currentRow{1} = folderName;
         currentRow{2} = snirfFiles(sn).name;
         
@@ -217,7 +216,8 @@ if ~isempty(combinedLogData)
     hdrCount = sum(strcmp(logTable.('.hdr'),'✓'));
     snirfCount = sum(strcmp(logTable.('.snirf'),'✓'));
     
-    fprintf('       → Summary: %d total, %d successful (%d HDR, %d SNIRF)\n', ...
+    fprintf(['       → Summary: %d total, %d successful ' ...
+             '(%d HDR, %d SNIRF)\n'], ...
             totalRows, successCount, hdrCount, snirfCount);
 end
 
@@ -263,10 +263,6 @@ function [snirfLeafs, hdrLeafs] = categorizeLeafs(leafs)
 end
 
 function realign_nirscout_channels(folderPath, baseName)
-    % REALIGN_NIRSCOUT_CHANNELS - Permute .wl1/.wl2 columns and S-D-Mask
-    % to convert NIRScout channel labels to NIRSport convention.
-    %
-    % Hardcoded mapping: NIRScout index → NIRSport index
     SRC_MAP = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
     DET_MAP = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6];
     
@@ -276,7 +272,7 @@ function realign_nirscout_channels(folderPath, baseName)
     oldMask = parse_sd_mask(hdrContent);
     [nSrc, nDet] = size(oldMask);
     
-    % -- Step 1: Get active channels in scan order (row-major = .wl column order)
+    % -- Step 1: Get active channels in scan order
     oldActiveList = [];
     for s = 1:nSrc
         for d = 1:nDet
@@ -292,7 +288,7 @@ function realign_nirscout_channels(folderPath, baseName)
     for i = 1:nChannels
         s_old = oldActiveList(i, 1);
         d_old = oldActiveList(i, 2);
-        % Apply mapping (keep as-is if index out of range, e.g. short channels)
+        % Apply mapping
         if s_old <= length(SRC_MAP), newActiveList(i,1) = SRC_MAP(s_old);
         else,                        newActiveList(i,1) = s_old; end
         if d_old <= length(DET_MAP), newActiveList(i,2) = DET_MAP(d_old);
@@ -468,7 +464,7 @@ function events = extract_events(file_content)
         return;
     end
     
-    events_str = file_content(content_start:(content_start + end_pos(1) - 2));
+    events_str = file_content(content_start:(content_start+end_pos(1)-2));
     events_str = strtrim(events_str);
     
     % Parse the events
@@ -502,26 +498,23 @@ end
 
 function extract_hdr_events(folderList, outputFile)
     % Create a CSV file for manual marker editing
-    % Now supports both .hdr and .snirf files
-    % Note: snirf/hdr priority is handled here - if folder has snirf, skip hdr
-    
     % Check if nirs-toolbox is available for SNIRF loading
     snirfAvailable = ~isempty(which('nirs.io.loadSNIRF'));
     if snirfAvailable
-        fprintf('       ℹ nirs-toolbox detected, SNIRF files will be processed\n');
+        fprintf(['       ℹ nirs-toolbox detected, ' ...
+                'SNIRF files will be processed\n']);
     else
-        fprintf('       ℹ nirs-toolbox not found, skipping SNIRF files\n');
+        fprintf(['       ℹ nirs-toolbox not found, ' ...
+                'skipping SNIRF files\n']);
     end
     
-    maxMarkers = 0;
-    rowData = {};  % Will hold {Folder, SourceType, SourceFile, markers...}
-    
+    maxMarkers = 0; rowData = {};
     for f = 1:length(folderList)
         [~, folderName] = fileparts(folderList{f});
         snirfFiles = dir(fullfile(folderList{f}, '*.snirf'));
         hasSnirfFiles = ~isempty(snirfFiles);
 
-        % Process HDR files only if NO snirf files exist (or toolbox unavailable)
+        % Process HDR files only if NO snirf files exist
         if ~hasSnirfFiles || ~snirfAvailable
             hdrFiles = dir(fullfile(folderList{f}, '*.hdr'));
             for h = 1:length(hdrFiles)
@@ -551,9 +544,10 @@ function extract_hdr_events(folderList, outputFile)
                     if isprop(data, 'stimulus') && ~isempty(data.stimulus)
                         stimValues = data.stimulus.values;
                         for n = 1:length(stimValues)
-                            if isprop(stimValues{n}, 'onset') || isfield(stimValues{n}, 'onset')
+                            if isprop(stimValues{n}, 'onset') ...
+                               || isfield(stimValues{n}, 'onset')
                                 onsets = stimValues{n}.onset;
-                                allOnsets = [allOnsets; onsets(:)]; %#ok<AGROW>
+                                allOnsets = [allOnsets; onsets(:)];
                             end
                         end
                     end
@@ -563,7 +557,7 @@ function extract_hdr_events(folderList, outputFile)
                     
                     newRow = {folderName, 'snirf', snirfFiles(s).name};
                     if ~isempty(allOnsets)
-                        newRow = [newRow, num2cell(allOnsets')]; %#ok<AGROW>
+                        newRow = [newRow, num2cell(allOnsets')];%#ok<AGROW>
                         maxMarkers = max(maxMarkers, length(allOnsets));
                     end
                     rowData{end+1} = newRow; %#ok<AGROW>
@@ -590,10 +584,11 @@ function extract_hdr_events(folderList, outputFile)
     end
     
     outTable = cell2table(outData, 'VariableNames', ...
-                          ['Folder', 'SourceType', 'SourceFile', markerCols]);
+                          ['Folder','SourceType','SourceFile',markerCols]);
     writetable(outTable, outputFile);
     
-    fprintf('       ✓ Extracted markers from %d sources\n', length(rowData));
+    fprintf('       ✓ Extracted markers from %d sources\n',...
+            length(rowData));
 end
 
 function update_hdr_events(markerFile, folderList)
@@ -642,7 +637,8 @@ function update_hdr_events(markerFile, folderList)
             case 'hdr'
                 % Existing HDR update logic
                 update_single_hdr(folder_path, source_file, ...
-                                  valid_markers, sample_rate, required_markers);
+                                  valid_markers, sample_rate, ...
+                                  required_markers);
                 
             case 'snirf'
                 % Create companion CSV for SNIRF
@@ -658,7 +654,8 @@ function update_hdr_events(markerFile, folderList)
     fprintf('       ✓ Event update complete.\n');
 end
 
-function update_single_hdr(folder_path, hdr_filename, markers, sample_rate, required_markers)
+function update_single_hdr(folder_path,hdr_filename,markers,sample_rate,...
+                           required_markers)
 
     file_path = fullfile(folder_path, hdr_filename);
     if ~exist(file_path, 'file')
@@ -732,7 +729,9 @@ function outputFile = revise_hdr_events(folderList)
     fprintf('       ☷ Opening default spreadsheet viewer application\n');
     if ispc
         winopen(char(outputFile));
-        checkCmd = sprintf('powershell -c "(Get-Process | Where-Object {$_.MainWindowTitle -like ''*%s*''}).Count -gt 0"', outputFile);
+        checkCmd = sprintf(['powershell -c "(Get-Process | Where-Object'...
+                            ' {$_.MainWindowTitle -like ''*%s*''})' ...
+                            '.Count -gt 0"'], outputFile);
     elseif ismac
         system(['open "' char(outputFile) '"']);
         checkCmd = ['lsof "' char(outputFile) '" > /dev/null 2>&1'];

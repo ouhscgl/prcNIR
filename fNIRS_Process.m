@@ -1,17 +1,23 @@
-function [GroupStats, demograph, stimulus] ...
-    = fNIRS_Process(load_path, nirstoolbox_path, user_vars)
-% fNIRS_Process - Main processing core for fNIRS pipeline.
-% VERSION_ID = 6.5.2
+function [results,demograph,stimulus] = fNIRS_Process(load_path, user_vars)
+%% ========================================================================
+%  Header - VERSION 7.1.2
+%  ========================================================================
+% This is the core Main processing core for fNIRS pipeline, takes in either
+% unprocessed NIRx datasets, unprocessed SNIRF datasets or SATORI processed
+% SNIRF datasets. NIRS compatibility in development.
+%
+% Requires:
+%    - nirs-toolbox (github.com/huppertt/nirs-toolbox) w/ patch
+%    - full prcNIR package
 % 
 % Options: 
-%     load_path        - path to fNIRS file or folder system
-%     nirstoolbox_path - path to nirs-toolbox (Huppert, T. et al.)
-%     user_vars        - list of customizable paramaters in the pipeline
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Data loading ____________________________________________________________
-%-- Adding nirs-toolbox to path
-addpath(genpath(nirstoolbox_path))
-%-- Default analysis variables
+%    - load_path        - path to fNIRS file or folder system
+%    - user_vars        - list of customizable paramaters in the pipeline
+% =========================================================================
+
+%% ========================================================================
+%  Initial setup
+%  ========================================================================
 defaults = struct();
 defaults.folder_structure   = {'group', 'subject'};
 defaults.dct_value          = 0.009;
@@ -24,16 +30,24 @@ defaults.regression_formula = {'beta ~ -1 + group + (1|subject)', ...
                                'beta ~ -1 + group:cond + (1|subject)'};
 defaults.save_as_snirf_flag = false;
 defaults.overwrite_as_snirf = false;
-defaults.calculate_total_hb = false;
+defaults.calculate_HbT      = false;
 defaults.do_preprocessing   = true;
-%--Validating user variables, setting to default if variable not present
+defaults.early_return       = "";
+
 user_vars = validateAnalyticParameters(user_vars, defaults);
-%-- Solo or directory data loading ( data_raws.probe.draw )
+
+%% ========================================================================
+%  Data loading (data_raws.probe.draw - montage easy access)
+%  ========================================================================
 data_raws = loadNIRSData(load_path, user_vars);
+if contains(user_vars.early_return,'raw data') 
+    results = data_raws; return; end
 % _________________________________________________________________________
 
-% Stimulus correction _____________________________________________________
-%-- Change stimulus data ( nirs.getStimNames(data_raws) );
+%% ========================================================================
+%  Stimulus correction (nirs.getStimNames(data_raws) - stimulus access)
+%  ========================================================================
+%-- Change stimulus data
 job = nirs.modules.ChangeStimulusInfo   ();
 [data_raws, mod_stimTable, rename_mapping] = createRobustStimMapping(...
    data_raws,user_vars.stim_names,user_vars.stim_onset,user_vars.stim_dur);
@@ -44,15 +58,20 @@ job.listOfChanges = rename_mapping;
 data_raws = job.run(data_raws);
 % _________________________________________________________________________
 
-% Identify short channels and exclude faux channels _______________________
+%% ========================================================================
+%  Pre-processing
+%  ========================================================================
+
 %-- Short channel identification
 job = nirs.modules.LabelShortSeperation ();
 job.max_distance = user_vars.max_short_distance;
+
 %-- Long channel identification and removal
 job = nirs.modules.LabeltooLongDistance (job);
 job.min_distance = user_vars.max_regul_distance;
 job = nirs.modules.RemovetooLongDistance(job);
-% _________________________________________________________________________
+
+%-- Quality assurance
 % data_raws = job.run(data_raws);
 % job_qt = nirs.modules.QT();
 % job_qt.qThreshold = 0.6;
@@ -75,76 +94,78 @@ job = nirs.modules.RemovetooLongDistance(job);
 %     fprintf('Subject %d: %d bad channels marked\n', i, length(bad_idx));
 % end
 
-% Transform to physiological data _________________________________________
+%-- Transform to physiological data & remove noise
 job = nirs.modules.OpticalDensity       (job);
-job = nirs.modules.TDDR(job);
+job = nirs.modules.TDDR                 (job);
 job = nirs.modules.BeerLambertLaw       (job);
-%-- Apply preprocessing if necessary
+
+%-- Apply preprocessing
 if user_vars.do_preprocessing, data_prps = job.run(data_raws);
 else,                          data_prps = data_raws;
 end
-% Calculate total hemoglobin - INDEV
-if user_vars.calculate_total_hb
-    temp = data_prps.data;
-    for row=1:2:size(temp,2)
-        data_prps.data(:,row) = temp(:,row) + temp(:,row+1);
-    end
-end
-% _________________________________________________________________________
-% Motion correction (Auto-regressive Iteratively Reweighted Least Squares)_
+
+%-- Calculate total hemoglobin
+if user_vars.calculate_HbT, data_prps = calculate_total_hb(data_prps); end
+
+%-- Early termination (pre-processed data)
+if contains(user_vars.early_return,'preprocessed data') 
+    results = data_prps; return; end
+
+%% ========================================================================
+%  GLM
+%  ========================================================================
+%-- Motion correction(Auto-regressive Iteratively Reweighted Least Squares)
 % Barker, J. W., Aarabi, A., & Huppert, T. J. (2013). 
 % Autoregressive model based algorithm for correcting motion and serially 
 % correlated errors in fNIRS. Biomedical optics express, 4(8), 1366–1379. 
 % https://doi.org/10.1364/BOE.4.001366
 job = nirs.modules.GLM                  (); 
 job.trend_func=@(t)nirs.design.trend.dctmtx(t, user_vars.dct_value);
-if isfield(data_prps(1).probe.link, 'ShortSeperation') && ...
-       any(data_prps(1).probe.link.ShortSeperation == 1)
+if isfield(data_prps(1).probe.link, 'ShortSeperation')
     job.AddShortSepRegressors = true;
-    job = nirs.modules.RemoveShortSeperations(job);
-else
-    job = nirs.modules.RemoveShortSeperations(job);
 end
+job = nirs.modules.RemoveShortSeperations(job);
 data_stat = job.run(data_prps);
-% _________________________________________________________________________
 
-% Extract data from the preprocessing pipeline ____________________________
+%% ========================================================================
+%  Statistics (Mixed Effects Model)
+%  ========================================================================
+%-- Extract auxilliary data from the preprocessing pipeline
 demograph = nirs.createDemographicsTable(data_prps);
 stimulus  = nirs.createStimulusTable(data_prps);
-% _________________________________________________________________________
 
-% Statistical analysis (Mixed Effects Model, Wilkinson notation) __________
+%-- Statistical analysis via Mixed Effects Model using Wilkinson notations
 job = nirs.modules.MixedEffects         ();
 for iter = 1:length(user_vars.regression_formula)
     job.formula = user_vars.regression_formula{iter};
-    GroupStats(iter) = job.run(data_stat);
+    results(iter) = job.run(data_stat);
     disp(['Conditions for formula: ', user_vars.regression_formula{iter}])
-    disp(GroupStats(iter).conditions)
+    disp(results(iter).conditions)
 end
-% _________________________________________________________________________
 disp('Finished processing data.')
-% _________________________________________________________________________
 
-% Auxillary functions _____________________________________________________
+%% ========================================================================
+%  Auxilliary Functions
+%  ========================================================================
 function data_raws = loadNIRSData(load_path, user_vars)
     % -- user specified: directory
     if isfolder(load_path)
         
         % Check low-level directories
-        leaf_dirs = getLeafDirs(load_path);
+        leaf_dirs = getLeafs(load_path);
         if isempty(leaf_dirs)
             leaf_dirs{1} = load_path;
         end
 
         % Gather supported files
-        loadable_dirs = {};  file_types = {};
+        load_dirs = {};  file_types = {};
         for i = 1:length(leaf_dirs)
             dir_path = leaf_dirs{i};
             
             % :: .snirf
             snirf_files = dir(fullfile(dir_path, '*.snirf'));
             if ~isempty(snirf_files)
-                loadable_dirs{end+1} = dir_path;
+                load_dirs{end+1} = dir_path;
                 file_types{end+1} = 'snirf';
                 continue;
             end
@@ -152,25 +173,43 @@ function data_raws = loadNIRSData(load_path, user_vars)
             % :: NIRx
             wl1_files = dir(fullfile(dir_path, '*.wl1'));
             if ~isempty(wl1_files)
-                loadable_dirs{end+1} = dir_path; %#ok<*AGROW>
+                load_dirs{end+1} = dir_path; %#ok<*AGROW>
                 file_types{end+1} = 'nirx';
             end
         end
-        if isempty(loadable_dirs)
+        if isempty(load_dirs)
         error('No valid data files found in: %s', load_path); end
         
         % Load valid files
         data_raws = [];
-        for i = 1:length(loadable_dirs)
+        for i = 1:length(load_dirs)
             % -- set iterable directory
-            dir_path = loadable_dirs{i}; file_type = file_types{i};
-            fprintf('[%d/%d] Loading: %s\n', i, length(loadable_dirs), dir_path);
+            dir_path = load_dirs{i}; file_type = file_types{i};
+            fprintf('[%d/%d] Loading: %s\n',i,length(load_dirs),dir_path);
             
             try
             % -- load file
             if strcmp(file_type, 'snirf')
                 snirf_files = dir(fullfile(dir_path, '*.snirf'));
-                data = nirs.io.loadSNIRF(fullfile(dir_path, snirf_files(1).name));
+                data = nirs.io.loadSNIRF(...
+                       fullfile(dir_path, snirf_files(1).name));
+                mrk = strrep(fullfile(dir_path, snirf_files(1).name),...
+                             'snirf','csv');
+
+                if isfile(mrk)
+                    marker_table = readtable(mrk, 'VariableNamingRule',...
+                                                  'preserve');
+                    data.stimulus = Dictionary();
+                    
+                    for m = 1:height(marker_table)
+                        stim = nirs.design.StimulusEvents();
+                        stim.name = marker_table.Marker{m};
+                        stim.onset = marker_table.Time(m);
+                        stim.dur = 1;
+                        stim.amp = 1;
+                        data.stimulus(stim.name) = stim;
+                    end
+                end
             else
                 data = nirs.io.loadNIRx(dir_path);
             end
@@ -199,7 +238,8 @@ function data_raws = loadNIRSData(load_path, user_vars)
                 warning('Error loading %s: %s', dir_path, e.message);
                 fprintf('  Stack trace:\n');
                 for k = 1:length(e.stack)
-                    fprintf('    %s (line %d)\n', e.stack(k).name, e.stack(k).line);
+                    fprintf('    %s (line %d)\n', ...
+                            e.stack(k).name, e.stack(k).line);
                 end
             end
         end
@@ -277,7 +317,21 @@ function params       = validateAnalyticParameters(params, defaults)
     params.regression_formula = {params.regression_formula};
     end
 end
-    
+
+function data = calculate_total_hb(data)  
+    for d = 1:size(data,1)
+        link = data(d).probe.link;
+        [G, ~] = findgroups(link.source, link.detector);
+        for g = 1:max(G)
+            idx = find(G == g);
+            if numel(idx) == 2
+                data(d).data(:, idx(1)) = data(d).data(:, idx(1)) + ...
+                                          data(d).data(:, idx(2));
+            end
+        end
+    end
+end
+
 function [stim_table] = stimTableMapper(stim_table, ...
                                         new_names, new_onsets, new_durs)
     % Input validation
@@ -390,13 +444,15 @@ function [stim_table] = stimTableMapper(stim_table, ...
 end
 
 function [data_raws, mod_stimTable, rename_mapping] = ...
-        createRobustStimMapping(data_raws, stim_names, stim_onset, stim_dur)
-    % Fix numeric stimulus names first
+        createRobustStimMapping(data_raws, stim_names, stim_onset,stim_dur)
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         for j = 1:length(stim_keys)
             key = stim_keys{j};
-            if ~isempty(str2double(key)) || (~isempty(key) && ~isnan(str2double(key(1))))
+            if ~isempty(str2double(key)) ...
+                || (~isempty(key) ...
+                && ~isnan(str2double(key(1))))
+                
                 new_key = ['x', key];
                 stim = data_raws(i).stimulus(key);
                 stim.name = new_key;
@@ -406,7 +462,6 @@ function [data_raws, mod_stimTable, rename_mapping] = ...
         end
     end
 
-    % Handle single stimulus with multiple events - split into separate channels
     for i = 1:length(data_raws)
         stim_keys = data_raws(i).stimulus.keys;
         
@@ -433,7 +488,6 @@ function [data_raws, mod_stimTable, rename_mapping] = ...
         end
     end
 
-    % RENAME STIMULI IN data_raws TO GENERIC NAMES (positionally per subject)
     for i = 1:length(data_raws)
         stim_keys = sort(data_raws(i).stimulus.keys);
         
@@ -450,15 +504,17 @@ function [data_raws, mod_stimTable, rename_mapping] = ...
         end
     end
     
-    % Check if user provided stim_names
-    use_user_names = ~(isscalar(stim_names) && (isnan(stim_names{1}) || strcmpi(stim_names{1}, 'NaN')));
+    use_user_names = ~(isscalar(stim_names) ...
+                     && (isnan(stim_names{1}) ...
+                     || strcmpi(stim_names{1}, 'NaN')));
     
     if use_user_names
         % Fix numeric names in user stim_names
         fixed_stim_names = cell(size(stim_names));
         for i = 1:length(stim_names)
             name = stim_names{i};
-            if ~isempty(str2double(name)) || (~isempty(name) && ~isnan(str2double(name(1))))
+            if ~isempty(str2double(name)) ...
+               || (~isempty(name) && ~isnan(str2double(name(1))))
                 fixed_stim_names{i} = ['x', name];
             else
                 fixed_stim_names{i} = name;
