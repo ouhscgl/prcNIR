@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""
-N-back Performance Statistical Analysis & Visualization
-========================================================
-Analyzes group differences in N-back performance using Mixed ANOVA
-and pairwise comparisons with FDR correction.
+# -*- coding: utf-8 -*-
 
-Input: group_summary.csv from extract_performance.py
-
-Output:
-    - Statistical results (ANOVA, pairwise comparisons)
-    - Bar plots per condition
-    - Grand average plots
-    - d' trajectory plot
-"""
+# =============================================================================
+# performance_statistics.py
+# N-back Performance Statistical Analysis & Visualization
+# -----------------------------------------------------------------------------
+# Developed by: zalkaposzt
+# Property of: University of Oklahoma Health Sciences Center, Yabluchanskiy Lab
+# Contact:     zalan-kaposzta@ou.edu
+# Date:        2026
+# -----------------------------------------------------------------------------
+# Usage (req. params.: group_summary.csv):
+# python performance_statistics group_summary.csv
+# -----------------------------------------------------------------------------
+# Output:
+# - Statistical results (ANOVA, pairwise comparisons)
+# - Bar plots per condition
+# - Grand average plots
+# - d' trajectory plot
+# =============================================================================
 
 import numpy as np
 import pandas as pd
@@ -31,7 +37,6 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # =============================================================================
 
-# Group display order and labels
 GROUP_ORDER = ['healthy_controls', 'normal_performers', 'low_performers']
 GROUP_LABELS = {
     'healthy_controls': 'Healthy Controls',
@@ -39,7 +44,6 @@ GROUP_LABELS = {
     'low_performers': 'Low Performers',
 }
 
-# Condition display order
 CONDITION_ORDER = ['nback_0a', 'nback_1a', 'nback_0b', 'nback_2a']
 CONDITION_LABELS = {
     'nback_0a': '0-back A',
@@ -49,12 +53,10 @@ CONDITION_LABELS = {
     'grand_average': 'Grand Avg',
 }
 
-# Placeholder colors (replace with your preferred colors)
-# Format: RGB tuples normalized to 0-1
 GROUP_COLORS = {
-    'healthy_controls': (0.467, 0.867, 0.467),    # Light green
-    'normal_performers': (0.886, 0.698, 0.447),   # Orange/tan
-    'low_performers': (0.753, 0.502, 0.494),      # Muted red/pink
+    'healthy_controls': (0.467, 0.867, 0.467),
+    'normal_performers': (0.886, 0.698, 0.447),
+    'low_performers': (0.753, 0.502, 0.494),
 }
 
 # Metrics to analyze
@@ -63,16 +65,13 @@ METRICS = {
     'rt_mean': {'label': 'Mean RT', 'ylabel': 'Reaction Time (s)'},
 }
 
-
 # =============================================================================
 # DATA LOADING
 # =============================================================================
 
 def load_and_prepare_data(filepath: Path) -> pd.DataFrame:
-    """Load group_summary.csv and extract group from SubjectID."""
     df = pd.read_csv(filepath)
     
-    # Extract group from SubjectID prefix
     def extract_group(subject_id):
         for group in GROUP_ORDER:
             if subject_id.startswith(group):
@@ -81,7 +80,6 @@ def load_and_prepare_data(filepath: Path) -> pd.DataFrame:
     
     df['Group'] = df['SubjectID'].apply(extract_group)
     
-    # Extract clean subject ID (without group prefix)
     def clean_subject_id(subject_id):
         for group in GROUP_ORDER:
             if subject_id.startswith(group + '_'):
@@ -102,14 +100,6 @@ def load_and_prepare_data(filepath: Path) -> pd.DataFrame:
 # =============================================================================
 
 def mixed_anova(df: pd.DataFrame, metric: str) -> dict:
-    """
-    Perform mixed ANOVA (Group × Condition).
-    
-    Between-subjects: Group
-    Within-subjects: Condition
-    
-    Returns dict with F-values, p-values for main effects and interaction.
-    """
     try:
         import pingouin as pg
         
@@ -148,7 +138,6 @@ def mixed_anova(df: pd.DataFrame, metric: str) -> dict:
 
 
 def cohens_d(group1: np.ndarray, group2: np.ndarray) -> float:
-    """Calculate Cohen's d effect size."""
     n1, n2 = len(group1), len(group2)
     var1, var2 = group1.var(ddof=1), group2.var(ddof=1)
     
@@ -167,23 +156,18 @@ def fdr_correction(p_values: list) -> list:
     if n == 0:
         return []
     
-    # Sort p-values and track original indices
     sorted_indices = np.argsort(p_values)
     sorted_p = np.array(p_values)[sorted_indices]
     
-    # Calculate adjusted p-values
     adjusted = np.zeros(n)
     for i, p in enumerate(sorted_p):
         adjusted[i] = p * n / (i + 1)
     
-    # Ensure monotonicity (each q >= previous q)
     for i in range(n - 2, -1, -1):
         adjusted[i] = min(adjusted[i], adjusted[i + 1])
     
-    # Clip to [0, 1]
     adjusted = np.clip(adjusted, 0, 1)
     
-    # Restore original order
     result = np.zeros(n)
     result[sorted_indices] = adjusted
     
@@ -191,11 +175,6 @@ def fdr_correction(p_values: list) -> list:
 
 
 def pairwise_comparisons(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """
-    Perform pairwise t-tests between groups for each condition.
-    
-    Returns DataFrame with all comparisons, uncorrected p, FDR-corrected q, and Cohen's d.
-    """
     results = []
     
     for condition in CONDITION_ORDER:
@@ -238,12 +217,6 @@ def pairwise_comparisons(df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
 
 def grand_average_pairwise_comparisons(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """
-    Perform pairwise t-tests between groups on grand average (mean across conditions).
-    
-    Returns DataFrame with all comparisons, uncorrected p, FDR-corrected q, and Cohen's d.
-    """
-    # Calculate grand average per subject (across all conditions)
     grand_avg = df.groupby(['Subject', 'Group'])[metric].mean().reset_index()
     
     results = []
@@ -285,7 +258,6 @@ def grand_average_pairwise_comparisons(df: pd.DataFrame, metric: str) -> pd.Data
 
 
 def get_group_stats(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Get descriptive statistics per group × condition."""
     stats_list = []
     
     for condition in CONDITION_ORDER:
@@ -311,7 +283,6 @@ def get_group_stats(df: pd.DataFrame, metric: str) -> pd.DataFrame:
 
 def add_significance_bracket(ax, x1, x2, y, p_val, height=0.02):
     """Add significance bracket between two x positions."""
-    # Determine significance stars
     if p_val < 0.001:
         sig_text = '***'
     elif p_val < 0.01:
@@ -319,7 +290,7 @@ def add_significance_bracket(ax, x1, x2, y, p_val, height=0.02):
     elif p_val < 0.05:
         sig_text = '*'
     else:
-        return  # No bracket for non-significant
+        return 
     
     # Draw bracket
     y_bracket = y
@@ -533,11 +504,6 @@ def plot_trajectory(df: pd.DataFrame, metric: str, output_dir: Path):
     plt.savefig(output_dir / f'trajectory_{metric}.svg', bbox_inches='tight')
     plt.close()
 
-
-# =============================================================================
-# REPORTING
-# =============================================================================
-
 def print_results(metric: str, anova_result: dict, pairwise_df: pd.DataFrame):
     """Print formatted statistical results."""
     print(f"\n{'='*70}")
@@ -586,11 +552,6 @@ def save_results(metric: str, anova_result: dict, pairwise_df: pd.DataFrame,
         anova_df.index.name = 'Effect'
         anova_df.to_csv(output_dir / f'anova_{metric}.csv')
 
-
-# =============================================================================
-# MAIN
-# =============================================================================
-
 def main():
     if len(sys.argv) >= 3:
         input_path = Path(sys.argv[1])
@@ -626,13 +587,9 @@ def main():
         else:
             combined_pairwise_df = pairwise_df
         
-        # Print results (including grand average)
         print_results(metric, anova_result, combined_pairwise_df)
-        
-        # Save results (with grand average included)
         save_results(metric, anova_result, combined_pairwise_df, stats_df, output_dir)
         
-        # Generate plots
         print(f"  Generating plots...")
         plot_condition_bars(df, metric, pairwise_df, output_dir)
         plot_grand_average(df, metric, output_dir)

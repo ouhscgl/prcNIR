@@ -148,6 +148,15 @@ disp('Finished processing data.')
 %  Auxilliary Functions
 %  ========================================================================
 function data_raws = loadNIRSData(load_path, user_vars)
+    %-- handle specific files only (e.g.: {'data1.snirf','data2.nirs'})
+    if iscell(load_path)
+        data_raws = [];
+        for p = 1:numel(load_path)
+            data_raws = [data_raws, loadNIRSData(load_path{p}, user_vars)];
+        end
+        return
+    end
+
     % -- user specified: directory
     if isfolder(load_path)
         

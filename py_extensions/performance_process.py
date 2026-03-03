@@ -10,6 +10,19 @@ warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 
 # =============================================================================
+# performance_process.py
+# Processes performance data
+# -----------------------------------------------------------------------------
+# Developed by: zalkaposzt
+# Property of: University of Oklahoma Health Sciences Center, Yabluchanskiy Lab
+# Contact:     zalan-kaposzta@ou.edu
+# Date:        2026
+# -----------------------------------------------------------------------------
+# Usage (req. params.: input_dir):
+# python performance_process <input_dir> <output_dir>
+# =============================================================================
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 
@@ -30,26 +43,11 @@ METRIC_COLS = [
     'rt_mean', 'rt_median', 'rt_sd', 'rt_cv'
 ]
 
-
-# =============================================================================
-# SIGNAL DETECTION FUNCTIONS
-# =============================================================================
-
 def compute_sdt_metrics(hits: int, misses: int, fa: int, cr: int) -> dict:
-    """
-    Compute signal detection theory metrics with log-linear correction.
-    
-    Uses the log-linear correction (adding 0.5 to all cells) to handle
-    extreme hit/FA rates that would produce infinite d'.
-    
-    Returns:
-        dict with hit_rate, fa_rate, d_prime, criterion
-    """
     n_targets = hits + misses
     n_nontargets = fa + cr
     
     # Log-linear correction (Hautus, 1995)
-    # Avoids infinite d' when hit_rate=1 or fa_rate=0
     hit_rate = (hits + 0.5) / (n_targets + 1)
     fa_rate = (fa + 0.5) / (n_nontargets + 1)
     
@@ -58,12 +56,11 @@ def compute_sdt_metrics(hits: int, misses: int, fa: int, cr: int) -> dict:
     z_fa = stats.norm.ppf(fa_rate)
     d_prime = z_hit - z_fa
     
-    # Criterion c = -0.5 * (z_hit + z_fa)
+    # Criterion c = -0.5 * (z_hit + z_fa) [I need a citation here I think or idk]
     # Negative c = liberal (tendency to respond)
     # Positive c = conservative (tendency to withhold)
     criterion = -0.5 * (z_hit + z_fa)
     
-    # Return uncorrected rates for reporting (more interpretable)
     raw_hit_rate = hits / n_targets if n_targets > 0 else np.nan
     raw_fa_rate = fa / n_nontargets if n_nontargets > 0 else np.nan
     
@@ -75,20 +72,7 @@ def compute_sdt_metrics(hits: int, misses: int, fa: int, cr: int) -> dict:
     }
 
 
-# =============================================================================
-# TRIAL CLASSIFICATION
-# =============================================================================
-
 def classify_trials(df: pd.DataFrame) -> dict:
-    """
-    Classify trials into hits, misses, false alarms, correct rejections.
-    
-    Args:
-        df: DataFrame with ExpectedResponse and ActualResponse columns
-        
-    Returns:
-        dict with trial counts
-    """
     # Determine if response was made
     if df['ActualResponse'].dtype == object:
         responded = df['ActualResponse'].notna() & (df['ActualResponse'] != '')
@@ -114,7 +98,6 @@ def classify_trials(df: pd.DataFrame) -> dict:
 
 
 def compute_accuracy_metrics(hits: int, misses: int, fa: int, cr: int) -> dict:
-    """Compute accuracy and precision."""
     total = hits + misses + fa + cr
     accuracy = (hits + cr) / total if total > 0 else np.nan
     precision = hits / (hits + fa) if (hits + fa) > 0 else np.nan
@@ -126,21 +109,12 @@ def compute_accuracy_metrics(hits: int, misses: int, fa: int, cr: int) -> dict:
 
 
 def compute_rt_metrics(df: pd.DataFrame) -> dict:
-    """
-    Compute reaction time metrics for correct responses (hits) only.
-    
-    This is standard practice - RTs for misses are undefined (no response),
-    and RTs for false alarms may reflect different cognitive processes.
-    """
-    # Filter for hits: expected response AND responded AND valid RT
     expected = df['ExpectedResponse'] == 1
-    
     if df['ActualResponse'].dtype == object:
         responded = df['ActualResponse'].notna() & (df['ActualResponse'] != '')
     else:
         responded = df['ActualResponse'].notna()
     
-    # Get RTs for hits with valid (non-inf) values
     rt_values = df.loc[expected & responded, 'ReactionTime']
     rt_values = rt_values.replace([np.inf, -np.inf], np.nan).dropna()
     
@@ -162,13 +136,7 @@ def compute_rt_metrics(df: pd.DataFrame) -> dict:
         'rt_cv': rt_sd / rt_mean if rt_mean > 0 else np.nan,
     }
 
-
-# =============================================================================
-# MAIN PROCESSING FUNCTIONS
-# =============================================================================
-
 def process_condition(df: pd.DataFrame) -> dict:
-    """Process a single condition (stimulus type) and return all metrics."""
     trial_counts = classify_trials(df)
     
     sdt = compute_sdt_metrics(
@@ -191,11 +159,6 @@ def process_condition(df: pd.DataFrame) -> dict:
 
 
 def process_subject(filepath: Path) -> pd.DataFrame:
-    """
-    Process a single subject file and return metrics by condition.
-    
-    Returns DataFrame with conditions as rows, metrics as columns.
-    """
     df = pd.read_csv(filepath)
     
     results = {}
@@ -216,27 +179,15 @@ def process_subject(filepath: Path) -> pd.DataFrame:
     
     # Convert to DataFrame
     results_df = pd.DataFrame(results).T
-    results_df = results_df[METRIC_COLS]  # Reorder columns
+    results_df = results_df[METRIC_COLS]
     results_df.index.name = 'Condition'
     
     return results_df
 
 
 def process_all(input_dir: Path, output_dir: Path, recursive: bool = True) -> pd.DataFrame:
-    """
-    Process all CSV files and generate summary outputs.
-    
-    Args:
-        input_dir: Directory containing standardized CSV files
-        output_dir: Directory for output files
-        recursive: Whether to search subdirectories
-        
-    Returns:
-        Group summary DataFrame
-    """
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Find all CSV files
     pattern = '**/*.csv' if recursive else '*.csv'
     csv_files = list(input_dir.glob(pattern))
     csv_files = [f for f in csv_files if not f.name.startswith('.')]
@@ -250,10 +201,8 @@ def process_all(input_dir: Path, output_dir: Path, recursive: bool = True) -> pd
     all_results = []
     
     for filepath in sorted(csv_files):
-        # Include subfolder in subject ID to handle duplicates
         rel_path = filepath.relative_to(input_dir)
         if len(rel_path.parts) > 1:
-            # File is in subfolder: use subfolder/filename format
             subject_id = f"{rel_path.parts[0]}_{filepath.stem}".replace('_COG', '')
         else:
             subject_id = filepath.stem.replace('_COG', '')
@@ -261,11 +210,9 @@ def process_all(input_dir: Path, output_dir: Path, recursive: bool = True) -> pd
         try:
             results = process_subject(filepath)
             
-            # Save individual subject file
             subj_output = output_dir / f"{subject_id}_performance.csv"
             results.to_csv(subj_output)
             
-            # Add to group summary
             for condition in results.index:
                 row = results.loc[condition].to_dict()
                 row['SubjectID'] = subject_id
@@ -277,18 +224,14 @@ def process_all(input_dir: Path, output_dir: Path, recursive: bool = True) -> pd
         except Exception as e:
             print(f"  {subject_id}: ERROR - {e}")
     
-    # Create group summary
     if all_results:
         group_df = pd.DataFrame(all_results)
         
-        # Reorder columns
         cols = ['SubjectID', 'Condition'] + METRIC_COLS
         group_df = group_df[cols]
         
-        # Save group summary
         group_df.to_csv(output_dir / 'group_summary.csv', index=False)
         
-        # Create pivoted summaries for key metrics
         for metric in ['d_prime', 'accuracy', 'rt_mean']:
             pivot = group_df.pivot(index='SubjectID', columns='Condition', values=metric)
             pivot.to_csv(output_dir / f'group_{metric}.csv')
@@ -302,14 +245,7 @@ def process_all(input_dir: Path, output_dir: Path, recursive: bool = True) -> pd
     
     return pd.DataFrame()
 
-
-# =============================================================================
-# SUMMARY STATISTICS
-# =============================================================================
-
 def print_group_summary(group_df: pd.DataFrame, group_var: str = None):
-    """Print summary statistics, optionally grouped."""
-    
     conditions = ['0-back', '1-back', '2-back', 'Overall']
     metrics = ['d_prime', 'accuracy', 'rt_mean']
     
@@ -330,11 +266,6 @@ def print_group_summary(group_df: pd.DataFrame, group_var: str = None):
             if len(vals) > 0:
                 print(f"  {metric:12s}: {vals.mean():.3f} ± {vals.std():.3f} "
                       f"(n={len(vals)})")
-
-
-# =============================================================================
-# CLI
-# =============================================================================
 
 def main():
     if len(sys.argv) >= 3:
