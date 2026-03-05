@@ -91,11 +91,11 @@ switch options.RevisedMarkers
     case "[]"
         fprintf('[4/5]: Manually revising markers...\n');
         markerfile = revise_hdr_events(leafs);
-        update_hdr_events(markerfile, leafs)
+        update_hdr_events(markerfile, leafs, udir.temp)
         delete(markerfile)
     otherwise
         fprintf('[4/5]: Updating markers using provided file...\n');
-        update_hdr_events(options.RevisedMarkers, leafs)
+        update_hdr_events(options.RevisedMarkers, leafs, udir.temp)
 end
 
 %% Step.05: Deliver clean files, remove temporary folder
@@ -265,7 +265,6 @@ end
 function realign_nirscout_channels(folderPath, baseName)
     SRC_MAP = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
     DET_MAP = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6];
-    
     % -- Load .hdr and parse S-D-Mask
     hdrPath = fullfile(folderPath, [baseName '.hdr']);
     hdrContent = fileread(hdrPath);
@@ -302,36 +301,21 @@ function realign_nirscout_channels(folderPath, baseName)
     end
     
     % -- Step 4: Get scan order of new mask (determines new column order)
-    newScanOrder = [];
-    for s = 1:nSrc
-        for d = 1:nDet
-            if newMask(s, d) == 1
-                newScanOrder(end+1, :) = [s, d]; %#ok<AGROW>
-            end
-        end
+    fullPerm = 1:(nSrc * nDet);          % start with identity
+    for i = 1:nChannels
+        oldS = oldActiveList(i,1);  oldD = oldActiveList(i,2);
+        newS = newActiveList(i,1);  newD = newActiveList(i,2);
+        oldCol = (oldS-1)*nDet + oldD;   % where the data lives now
+        newCol = (newS-1)*nDet + newD;   % where it needs to go
+        fullPerm(newCol) = oldCol;
     end
     
-    % -- Step 5: Compute permutation vector
-    % permutation(j) = which old column index goes into new column j
-    permutation = zeros(1, nChannels);
-    for newCol = 1:nChannels
-        targetS = newScanOrder(newCol, 1);
-        targetD = newScanOrder(newCol, 2);
-        for oldCol = 1:nChannels
-            if newActiveList(oldCol,1) == targetS && ...
-               newActiveList(oldCol,2) == targetD
-                permutation(newCol) = oldCol;
-                break;
-            end
-        end
-    end
-    
-    % -- Step 6: Permute .wl1 and .wl2 columns
+    % -- Step 5: Permute .wl1 and .wl2 columns (full grid)
     for wl = 1:2
         wlPath = fullfile(folderPath, sprintf('%s.wl%d', baseName, wl));
         if ~exist(wlPath, 'file'), continue; end
         wlData = readmatrix(wlPath, 'FileType', 'text', 'Delimiter', ' ');
-        wlData = wlData(:, permutation);
+        wlData = wlData(:, fullPerm);
         writematrix(wlData, wlPath, 'FileType', 'text', 'Delimiter', ' ');
     end
     
@@ -496,7 +480,7 @@ function events = extract_events(file_content)
     end
 end
 
-function extract_hdr_events(folderList, outputFile)
+function extract_hdr_events(folderList, outputFile, tempdir)
     % Create a CSV file for manual marker editing
     % Check if nirs-toolbox is available for SNIRF loading
     snirfAvailable = ~isempty(which('nirs.io.loadSNIRF'));
@@ -510,7 +494,7 @@ function extract_hdr_events(folderList, outputFile)
     
     maxMarkers = 0; rowData = {};
     for f = 1:length(folderList)
-        [~, folderName] = fileparts(folderList{f});
+        folderName = strrep(folderList{f}, [tempdir filesep], '');
         snirfFiles = dir(fullfile(folderList{f}, '*.snirf'));
         hasSnirfFiles = ~isempty(snirfFiles);
 
@@ -591,7 +575,7 @@ function extract_hdr_events(folderList, outputFile)
             length(rowData));
 end
 
-function update_hdr_events(markerFile, folderList)
+function update_hdr_events(markerFile, folderList, tempdir)
     % Read the marker file (now includes SourceType and SourceFile columns)
     marker_table = readtable(markerFile);
     sample_rate = NaN;
@@ -610,7 +594,7 @@ function update_hdr_events(markerFile, folderList)
         % Find the corresponding folder in folderList
         folder_path = '';
         for f = 1:length(folderList)
-            [~, fn] = fileparts(folderList{f});
+            fn = strrep(folderList{f}, [tempdir filesep], '');
             if strcmp(fn, folder_name)
                 folder_path = folderList{f};
                 break;
@@ -723,7 +707,7 @@ end
 function outputFile = revise_hdr_events(folderList)
     %-- create marker list from .hdr and .snirf files
     outputFile = fullfile(pwd,'temp.csv');
-    extract_hdr_events(folderList, outputFile); tic
+    extract_hdr_events(folderList, outputFile, udir.temp); tic
     
     %-- open marker list in default csv viewer application
     fprintf('       ☷ Opening default spreadsheet viewer application\n');
