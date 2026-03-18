@@ -262,16 +262,29 @@ function [snirfLeafs, hdrLeafs] = categorizeLeafs(leafs)
     end
 end
 
-function realign_nirscout_channels(folderPath, baseName)
+    function realign_nirscout_channels(folderPath, baseName)
+% REALIGN_NIRSCOUT_CHANNELS  Remap NIRScout S-D indices to NIRSport layout
+%
+%   Permutes: .wl1/.wl2 data columns, S-D-Mask, Gains, DarkNoise, ChanDis
+%   so that the resulting files look as if they were recorded on a NIRSport
+%   using the NIRSport's native source/detector numbering.
+%
+%   SRC_MAP(i) = j means: NIRScout source i → NIRSport source j
+%   DET_MAP(i) = j means: NIRScout detector i → NIRSport detector j
+%   Detectors beyond length(DET_MAP) (i.e. short detectors) keep their
+%   original index — their data is replicated across D17-D24 per source
+%   on NIRScout, so only the source remapping matters for intensity values.
+
     SRC_MAP = [4, 2, 3, 13, 1, 10, 11, 9, 12, 15, 14, 16, 6, 8, 7, 5];
     DET_MAP = [2, 4, 1, 3, 11, 9, 10, 16, 13, 12, 15, 14, 7, 5, 8, 6];
-    % -- Load .hdr and parse S-D-Mask
+
+    % -- Load .hdr
     hdrPath = fullfile(folderPath, [baseName '.hdr']);
     hdrContent = fileread(hdrPath);
     oldMask = parse_sd_mask(hdrContent);
     [nSrc, nDet] = size(oldMask);
-    
-    % -- Step 1: Get active channels in scan order
+
+    % -- Step 1: Get active channels in scan order (row-major traversal)
     oldActiveList = [];
     for s = 1:nSrc
         for d = 1:nDet
@@ -281,57 +294,161 @@ function realign_nirscout_channels(folderPath, baseName)
         end
     end
     nChannels = size(oldActiveList, 1);
-    
-    % -- Step 2: Compute new (s,d) for each channel via mapping
+
+    % -- Step 2: Compute remapped (s,d) for each channel
     newActiveList = zeros(size(oldActiveList));
     for i = 1:nChannels
         s_old = oldActiveList(i, 1);
         d_old = oldActiveList(i, 2);
-        % Apply mapping
         if s_old <= length(SRC_MAP), newActiveList(i,1) = SRC_MAP(s_old);
         else,                        newActiveList(i,1) = s_old; end
         if d_old <= length(DET_MAP), newActiveList(i,2) = DET_MAP(d_old);
         else,                        newActiveList(i,2) = d_old; end
     end
-    
-    % -- Step 3: Build new S-D-Mask from remapped coordinates
+
+    % -- Step 3: Build new S-D-Mask
     newMask = zeros(nSrc, nDet);
     for i = 1:nChannels
         newMask(newActiveList(i,1), newActiveList(i,2)) = 1;
     end
-    
-    % -- Step 4: Get scan order of new mask (determines new column order)
-    fullPerm = 1:(nSrc * nDet);          % start with identity
+
+    % -- Step 4: Build column permutation for full grid
+    %   fullPerm(newCol) = oldCol  →  output(:,newCol) = input(:,oldCol)
+    fullPerm = 1:(nSrc * nDet);          % identity baseline
     for i = 1:nChannels
-        oldS = oldActiveList(i,1);  oldD = oldActiveList(i,2);
-        newS = newActiveList(i,1);  newD = newActiveList(i,2);
-        oldCol = (oldS-1)*nDet + oldD;   % where the data lives now
-        newCol = (newS-1)*nDet + newD;   % where it needs to go
+        oldCol = (oldActiveList(i,1)-1)*nDet + oldActiveList(i,2);
+        newCol = (newActiveList(i,1)-1)*nDet + newActiveList(i,2);
         fullPerm(newCol) = oldCol;
     end
-    
-    % -- Step 5: Permute .wl1 and .wl2 columns (full grid)
+
+    % -- Step 5: Permute .wl1 and .wl2 columns (preserve formatting)
     for wl = 1:2
         wlPath = fullfile(folderPath, sprintf('%s.wl%d', baseName, wl));
         if ~exist(wlPath, 'file'), continue; end
         wlData = readmatrix(wlPath, 'FileType', 'text', 'Delimiter', ' ');
         wlData = wlData(:, fullPerm);
-        writematrix(wlData, wlPath, 'FileType', 'text', 'Delimiter', ' ');
+        dlmwrite(wlPath, wlData, 'delimiter', ' ', 'precision', '%.7f');
     end
-    
-    % -- Step 7: Update S-D-Mask in .hdr
+
+    % -- Step 6: Permute Gains matrix
+    oldGains = parse_block(hdrContent, 'Gains');
+    if ~isempty(oldGains)
+        newGains = oldGains;
+        for i = 1:nChannels
+            sO = oldActiveList(i,1); dO = oldActiveList(i,2);
+            sN = newActiveList(i,1); dN = newActiveList(i,2);
+            newGains(sN, dN) = oldGains(sO, dO);
+        end
+        hdrContent = replace_block(hdrContent, 'Gains', newGains, '%d');
+    end
+
+    % -- Step 7: Permute DarkNoise (detector-indexed, 1×nDet)
+    for wlTag = ["Wavelength1", "Wavelength2"]
+        oldDN = parse_block(hdrContent, wlTag);
+        if isempty(oldDN), continue; end
+        newDN = oldDN;
+        for d = 1:min(length(DET_MAP), length(oldDN))
+            newDN(DET_MAP(d)) = oldDN(d);
+        end
+        hdrContent = replace_block(hdrContent, wlTag, newDN, '%.3f');
+    end
+
+    % -- Step 8: Permute ChannelsDistance (scan-order indexed)
+    hdrContent = permute_chandis(hdrContent, oldMask, newMask, ...
+                                  oldActiveList, newActiveList, nChannels);
+
+    % -- Step 9: Write updated S-D-Mask and save
     hdrContent = replace_sd_mask(hdrContent, newMask);
     fid = fopen(hdrPath, 'w');
     fprintf(fid, '%s', hdrContent);
     fclose(fid);
 end
 
+% =========================================================================
+%  Block parse/replace helpers
+% =========================================================================
+
+function mat = parse_block(content, tag)
+%PARSE_BLOCK  Extract a "#...#" delimited numeric block by tag name.
+%   Works for both matrix blocks (Gains) and vector blocks (Wavelength1).
+    pattern = [char(tag) '="#\s*([\s\S]*?)#"'];
+    tokens = regexp(content, pattern, 'tokens', 'once');
+    if isempty(tokens), mat = []; return; end
+    lines = strsplit(strtrim(tokens{1}), newline);
+    mat = [];
+    for i = 1:length(lines)
+        line = strtrim(lines{i});
+        if isempty(line), continue; end
+        rowVals = str2num(line); %#ok<ST2NM>
+        if ~isempty(rowVals), mat(end+1,:) = rowVals; end %#ok<AGROW>
+    end
+end
+
+function content = replace_block(content, tag, newMat, fmt)
+%REPLACE_BLOCK  Rewrite a "#...#" delimited block with new values.
+    blockStr = '';
+    for r = 1:size(newMat, 1)
+        rowVals = sprintf([fmt '\t'], newMat(r, :));
+        blockStr = [blockStr, strtrim(rowVals), newline]; %#ok<AGROW>
+    end
+    pattern = ['(' char(tag) '="#)[^#]*(#")'];
+    if ~isempty(regexp(content, pattern, 'once'))
+        content = regexprep(content, pattern, ['$1' newline blockStr '$2']);
+    end
+end
+
+% =========================================================================
+%  ChannelsDistance permutation
+% =========================================================================
+
+function content = permute_chandis(content, oldMask, newMask, ...
+                                    oldActiveList, newActiveList, nCh)
+    pat = 'ChanDis="([^"]*)"';
+    tokens = regexp(content, pat, 'tokens', 'once');
+    if isempty(tokens), return; end
+    oldDist = str2num(tokens{1}); %#ok<ST2NM>
+    if isempty(oldDist) || length(oldDist) ~= nCh, return; end
+
+    % Map each old channel to its old scan-order position
+    %   oldScanPos(i) = position of channel i in the old scan order
+    %   (trivially = i, since oldActiveList is already in scan order)
+    % Map each new position to the channel index that lands there
+    [nSrc, nDet] = size(newMask);
+    
+    % Build lookup: (newS,newD) → which channel index
+    chanLookup = containers.Map('KeyType','char','ValueType','int32');
+    for i = 1:nCh
+        key = sprintf('%d-%d', newActiveList(i,1), newActiveList(i,2));
+        chanLookup(key) = i;
+    end
+
+    % Walk new mask in scan order, pull distance from the original channel
+    newDist = zeros(1, nCh);
+    distIdx = 0;
+    for s = 1:nSrc
+        for d = 1:nDet
+            if newMask(s, d) ~= 1, continue; end
+            distIdx = distIdx + 1;
+            key = sprintf('%d-%d', s, d);
+            if chanLookup.isKey(key)
+                origIdx = chanLookup(key);   % which channel lives here now
+                newDist(distIdx) = oldDist(origIdx); % its original distance
+            end
+        end
+    end
+
+    distStr = strtrim(sprintf('%.1f\t', newDist));
+    content = regexprep(content, pat, ['ChanDis="' distStr '"']);
+end
+
+% =========================================================================
+%  S-D-Mask parse/replace
+% =========================================================================
+
 function mask = parse_sd_mask(hdrContent)
-    % Extract S-D-Mask matrix from .hdr content
     pattern = 'S-D-Mask="#\s*([\s\S]*?)#"';
     tokens = regexp(hdrContent, pattern, 'tokens', 'once');
     if isempty(tokens), error('S-D-Mask not found in header file'); end
-    
     lines = strsplit(strtrim(tokens{1}), newline);
     mask = [];
     for i = 1:length(lines)
@@ -343,7 +460,6 @@ function mask = parse_sd_mask(hdrContent)
 end
 
 function content = replace_sd_mask(content, newMask)
-    % Replace S-D-Mask section in .hdr content
     maskStr = '';
     for r = 1:size(newMask, 1)
         rowVals = sprintf('%d\t', newMask(r, :));

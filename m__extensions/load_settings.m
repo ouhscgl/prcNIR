@@ -7,6 +7,7 @@ fclose(fid);
 % -- Parse JSON
 raw_settings = jsondecode(json_text);
 settings = procinp(raw_settings);
+fprintf('✓ Successfully loaded settings.\n');
 end
 % Auxilliary functions
 function processed = procinp(input)

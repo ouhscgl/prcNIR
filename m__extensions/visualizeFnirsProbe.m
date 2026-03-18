@@ -87,7 +87,7 @@ plot(midpoints(:,1), midpoints(:,2), 'ko', ...
 all_x = [srcPos2D(:,1); detPos2D(:,1)];
 all_y = [srcPos2D(:,2); detPos2D(:,2)];
 if overlay_eeg
-    all_x = [all_x; [chanlocs.Y]' * 0.7];
+    all_x = [all_x; -[chanlocs.Y]' * 0.7];
     all_y = [all_y; [chanlocs.X]' * 0.7];
 end
 offset_x = (max(all_x) - min(all_x)) * 0.03;
@@ -114,7 +114,7 @@ end
 %  STEP 4: Optional EEG overlay
 %  ========================================================================
 if overlay_eeg
-    eeg_x      = [chanlocs.Y]' * 0.7;
+    eeg_x      = -[chanlocs.Y]' * 0.7;
     eeg_y      = [chanlocs.X]' * 0.7;
     eeg_labels = {chanlocs.labels}';
 
@@ -135,6 +135,14 @@ end
 
 legend('Location', 'best');
 grid off; axis equal; hold off;
+
+% Expand axis limits by 10% to prevent labels clipping outside
+ax = gca;
+xl = ax.XLim; yl = ax.YLim;
+x_pad = (xl(2) - xl(1)) * 0.10;
+y_pad = (yl(2) - yl(1)) * 0.10;
+ax.XLim = [xl(1) - x_pad, xl(2) + x_pad];
+ax.YLim = [yl(1) - y_pad, yl(2) + y_pad];
 
 %% ========================================================================
 %  STEP 5: Output table (long-channel midpoints + EEG if provided)

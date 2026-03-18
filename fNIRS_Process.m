@@ -39,6 +39,9 @@ user_vars = validateAnalyticParameters(user_vars, defaults);
 %% ========================================================================
 %  Data loading (data_raws.probe.draw - montage easy access)
 %  ========================================================================
+% Please refer to comments under loadNIRSData() function itself regarding
+% implementation, in short allows for dynamic loads and handles various
+% data and folder structures gracefully.
 data_raws = loadNIRSData(load_path, user_vars);
 if contains(user_vars.early_return,'raw data') 
     results = data_raws; return; end
@@ -62,8 +65,13 @@ data_raws = job.run(data_raws);
 %  Pre-processing
 %  ========================================================================
 
+%-- Trim dataset to 10s pre and post stimulus period to match internal 
+%   Satori consensus
+job = nirs.modules.TrimBaseline         ();
+[job.preBaseline, job.postBaseline] = deal(10);
+
 %-- Short channel identification
-job = nirs.modules.LabelShortSeperation ();
+job = nirs.modules.LabelShortSeperation (job);
 job.max_distance = user_vars.max_short_distance;
 
 %-- Long channel identification and removal
@@ -72,6 +80,12 @@ job.min_distance = user_vars.max_regul_distance;
 job = nirs.modules.RemovetooLongDistance(job);
 
 %-- Quality assurance
+%   Step was removed to match the phylosophy of the Hupper lab which aims
+%   to maintain as much data as possible within the regression model,
+%   including physiological and external noise, with some obvious
+%   corrections implemented via TDDR(). Leaving the commented segment here
+%   in case some want to re-implement, but channel count inconsistency for
+%   the mixed effects model will be a concern (!).
 % data_raws = job.run(data_raws);
 % job_qt = nirs.modules.QT();
 % job_qt.qThreshold = 0.6;
@@ -148,7 +162,15 @@ disp('Finished processing data.')
 %  Auxilliary Functions
 %  ========================================================================
 function data_raws = loadNIRSData(load_path, user_vars)
-    %-- handle specific files only (e.g.: {'data1.snirf','data2.nirs'})
+    % Handle specific files only (e.g.: {'data1.snirf','data2.nirs'})
+    % Uses a nested loop to read in individually defined data into a single
+    % set. Use case: analyzing one individual's before and after states.
+    % if iscell(load_path)
+    %     data_raws = cellfun(@(p) loadNIRSData(p, user_vars), load_path,...
+    %                         'UniformOutput', false);
+    %     data_raws = [data_raws{:}];
+    %     return
+    % end
     if iscell(load_path)
         data_raws = [];
         for p = 1:numel(load_path)
@@ -156,7 +178,7 @@ function data_raws = loadNIRSData(load_path, user_vars)
         end
         return
     end
-
+    
     % -- user specified: directory
     if isfolder(load_path)
         
