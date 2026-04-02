@@ -23,6 +23,7 @@ disp('       (this may take a while, grab a coffee)'); end
 udir.temp = fullfile(pwd, 'temp');
 udir.outp = options.OutputDir;
 structfun(@(d) mkdir(d), udir, 'UniformOutput', false);
+cleanupObj = onCleanup(@() safeCleanup(udir.temp));
 
 % -- copy files to working directory (yes, I know its leaves but...)
 leafs = getLeafs(options.InputDir); leafs{end+1} = options.InputDir;
@@ -661,7 +662,7 @@ function extract_hdr_events(folderList, outputFile, tempdir)
                         maxMarkers = max(maxMarkers, length(allOnsets));
                     end
                     rowData{end+1} = newRow; %#ok<AGROW>
-                    
+                    clear data;
                 catch ME
                     fprintf('       ⚠ Failed to load SNIRF: %s (%s)\n', ...
                             snirfFiles(s).name, ME.message);
@@ -934,5 +935,10 @@ function updated_content = replace_events_section(file_content, new_events)
     updated_content = [file_content(1:(events_field_pos + 8)), ...
                       newline, new_events, ...
                       sprintf('#"'), file_content((events_end_pos+1):end)];
+end
+
+function safeCleanup(tempDir)
+    fclose('all'); pause(0.5);
+    if exist(tempDir, 'dir'), try rmdir(tempDir, 's'); catch; end; end
 end
 end

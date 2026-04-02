@@ -28,7 +28,8 @@ elseif iscell(input), processed = input;
 % -- process NaN
 elseif ischar(input) && strcmp(input, 'NaN'), processed = NaN;
 % -- process num. arrays
-elseif isnumeric(input) && ~isscalar(input), processed = num2cell(input);
+%elseif isnumeric(input) && ~isscalar(input), processed = num2cell(input);
+elseif isnumeric(input) && isvector(input) && ~isscalar(input), processed = input(:)';
 % -- process str. arrays
 elseif isstring(input) && ~isscalar(input), processed = cellstr(input);
 % -- process miscellaneous
