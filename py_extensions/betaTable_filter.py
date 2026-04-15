@@ -10,9 +10,9 @@
 # Date:        2024
 # -----------------------------------------------------------------------------
 # Usage (req. params.: input): python filter_beta_tables.py ...
-# - trim to prefrontal cx: ... montage input.csv output.csv nirscout
+# - trim to prefrontal cx: ... montage input.csv output.csv nirscout|nirsport|ldlfpc
 # - gate to p or q values: ... gate data.csv p 0.05 
-# - do both, sequentially: ... montage_and_gate input.csv output.csv nirscout p 0.05
+# - do both, sequentially: ... montage_and_gate input.csv output.csv nirscout|nirsport|ldlfpc p 0.05
 # =============================================================================
 
 import pandas as pd
@@ -64,8 +64,14 @@ def filter_spreadsheet(input_file, output_file, montage_type):
         df = df[~df['detector'].isin([5, 12])]
         print(f"Applied TRE (nirsport) filter: {len(df)} rows remaining")
 
+    elif montage_type.lower() == 'ldlfpc':
+        valid_pairs = {(2, 2), (2, 1), (3, 2), (4, 2)}
+        mask = df.apply(lambda r: (r['source'], r['detector']) in valid_pairs, axis=1)
+        df = df[mask].copy()
+        print(f"Applied LDLFPC filter: {len(df)} rows remaining")
+
     else:
-        print(f"Error: Unknown montage type '{montage_type}'. Use 'nirscout' or 'nirsport'.")
+        print(f"Error: Unknown montage type '{montage_type}'. Use 'nirscout', 'nirsport', or 'ldlfpc'.")
         return False
 
     try:
@@ -103,7 +109,7 @@ if __name__ == '__main__':
     p_montage = subparsers.add_parser('montage', help='Filter by montage type (nirscout/nirsport)')
     p_montage.add_argument('input_file')
     p_montage.add_argument('output_file', nargs='?', default=None)
-    p_montage.add_argument('montage_type', choices=['nirscout', 'nirsport'], default='nirscout')
+    p_montage.add_argument('montage_type', choices=['nirscout', 'nirsport', 'ldlfpc'], default='nirscout')
 
     # gate subcommand
     p_gate = subparsers.add_parser('gate', help='Filter rows by p or q value')
@@ -116,7 +122,7 @@ if __name__ == '__main__':
     p_both = subparsers.add_parser('montage_and_gate', help='Run montage filter then p/q gate')
     p_both.add_argument('input_file')
     p_both.add_argument('output_file', nargs='?', default=None)
-    p_both.add_argument('montage_type', choices=['nirscout', 'nirsport'], default='nirscout')
+    p_both.add_argument('montage_type', choices=['nirscout', 'nirsport', 'ldlfpc'], default='nirscout')
     p_both.add_argument('column', nargs='?', default='p', choices=['p', 'q'])
     p_both.add_argument('threshold', nargs='?', type=float, default=0.05)
 
