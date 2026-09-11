@@ -694,7 +694,10 @@ end
 
 function update_hdr_events(markerFile, folderList, tempdir)
     % Read the marker file (now includes SourceType and SourceFile columns)
-    marker_table = readtable(markerFile);
+    marker_table = readtable(markerFile, ...
+    'Delimiter',         ',', ...
+    'TextType',          'string', ...
+    'VariableNamingRule','preserve');
     sample_rate = NaN;
     
     % Get required markers (count marker columns)

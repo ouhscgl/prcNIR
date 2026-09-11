@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "nback_pairwise": {
+      "label": "N-back, pairwise V1 vs V2",
+      "notes": "Each subject is analysed on their own, V1 against V2. Condition names come from the fitted model, so after the first run read them off stats.conditions (or the Visualize tab) before adding contrasts to the group_by_cond model - they look like 'V1:nback2a'.",
+
+      "paths": {
+        "data_root":  "",
+        "output_dir": "",
+        "clean_dir":  ""
+      },
+
+      "montage": "nirscout",
+
+      "dataset": {
+        "folder_structure": ["group", "subject"]
+      },
+
+      "stimulus": {
+        "names":    ["nback0a", "nback1a", "nback0b", "nback2a"],
+        "onset":    null,
+        "duration": 72
+      },
+
+      "pipeline": {
+        "preprocess": [
+          {"module": "TrimBaseline",         "preBaseline": 10, "postBaseline": 10},
+          {"module": "LabelShortSeperation", "max_distance": 10},
+          {"module": "LabeltooLongDistance", "min_distance": 50},
+          {"module": "RemovetooLongDistance"},
+          {"module": "OpticalDensity"},
+          {"module": "TDDR"},
+          {"module": "BeerLambertLaw"}
+        ],
+
+        "glm": {
+          "module": "GLM",
+          "type": "AR-IRLS",
+          "trend": {"type": "dct", "value": 0.009},
+          "add_short_sep_regressors": true,
+          "remove_short_seperations": true
+        },
+
+        "group": {
+          "module": "MixedEffects",
+          "models": [
+            {"name": "group_main",    "formula": "beta ~ -1 + group"},
+            {"name": "group_by_cond", "formula": "beta ~ -1 + group:cond"}
+          ]
+        },
+
+        "post": [
+          {"module": "CalculateTotalHb", "enabled": false}
+        ]
+      },
+
+      "visualize": {
+        "model":         "group_main",
+        "significance":  ["p", "q"],
+        "threshold":     0.05,
+        "tstat_range":   [-8, 8],
+        "chromophores":  ["hbo", "hbr"],
+        "save_table":    true,
+        "draw_method":   "10-20 map",
+        "fig_format":    "svg",
+        "output_prefix": "",
+
+        "contrasts": [
+          {
+            "name":  "V2-V1",
+            "model": "group_main",
+            "weights": [
+              {"condition": "V2", "value":  1},
+              {"condition": "V1", "value": -1}
+            ]
+          },
+          {
+            "name":  "V1",
+            "model": "group_main",
+            "weights": [
+              {"condition": "V1", "value": 1}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

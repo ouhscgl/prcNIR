@@ -4,28 +4,38 @@
 DATA_PATH         = 'SET THIS TO WHERE YOUR RAW DATA IS';
 PROGRAMPATH       = 'SET THIS TO WHERE YOUR SOFTWARE`S PARENT FOLDER IS';
 
-NIRS_PATH         = fullfile(PROGRAMPATH,'prcNIR');
-NIRS_TOOLBOX_PATH = fullfile(PROGRAMPATH,'nirs-toolbox');
-addpath(genpath(NIRS_TOOLBOX_PATH),genpath(NIRS_PATH));
-fprintf('\nPaths loaded in successfully.\n');
+%-- prcNIR_setup puts both prcNIR and nirs-toolbox on the path and then checks
+%   that everything it needs is actually there: MATLAB version, the two
+%   MathWorks toolboxes, and whether nirs-toolbox is patched. All of those are
+%   fatal, so it is worth failing here rather than an hour into a run.
+%   First time on a machine, run it once as:  prcNIR_setup('Patch', true)
+addpath(fullfile(PROGRAMPATH, 'prcNIR'));
+[~, ready] = prcNIR_setup('ToolboxRoot', fullfile(PROGRAMPATH, 'nirs-toolbox'));
+if ~ready, error('Environment is not ready -- see the failures above.'); end
 
 %% ========================================================================
 %  Clean dataset
 %  ========================================================================
 %% General cleaning -> changing pinfo
-clean_dir = fullfile(pwd,'clean_dataset');
-NRA_cleanFNIRSData(DATA_PATH, ...
-    'nirscout_optode_data_link_traditional.csv', ...
-    'nirscout_optode_data_geom_traditional.csv', [], clean_dir)
+clean_dir = fullfile(pwd,'clean_dataset');   % overridden below if the profile sets one
+fNIRS_cleanRawData( ...
+    'InputDir',   DATA_PATH, ...
+    'OptodeLink', fullfile(PROGRAMPATH,'prcNIR','configs', ...
+                           'nirscout_optode_data_link_traditional.csv'), ...
+    'OptodeGeom', fullfile(PROGRAMPATH,'prcNIR','configs', ...
+                           'nirscout_optode_data_geom_traditional.csv'), ...
+    'OutputDir',  clean_dir);
 
 %% ========================================================================
 %  Process dataset
 %  ========================================================================
 %% Apply settings
-settings=load_settings('example_settings.json');
-prc             = settings.nir.processing.nback_pairwise;
-viz             = settings.nir.visualizing.nback_pairwise; 
-viz.contrasts   = settings.contrasts.nback_pairwise;
+%-- One profile holds the whole analysis: stimulus naming, the pipeline, the
+%   models and the contrasts. Edit configs/profiles/example.json by hand or in
+%   the app; both write the same file.
+settingsFile = fullfile(PROGRAMPATH,'prcNIR','configs','profiles','example.json');
+[cfg, meta]  = prc.loadSettings(settingsFile, 'nback_pairwise');
+user_vars    = prc.toUserVars(cfg);
 
 %% Create analysis framework
 % Requirments: 
@@ -43,10 +53,15 @@ pairs = [v1(valid); v2(valid)];
 fprintf('Found %d pairs.\n', size(pairs, 2));
 
 %% Analyze dataset (pairwise)
-resultsdir = fullfile(pwd,'results'); tmpdir = fullfile(pwd,'temp');
+%-- paths in a profile are relative to the profile file; unset means "here"
+resultsdir = prc.abspath(cfg.paths.output_dir, meta.root);
+if isempty(resultsdir), resultsdir = fullfile(pwd,'results'); end
+tmpdir     = fullfile(pwd,'temp');
+
 for i = 1:size(pairs, 2)
     pairname = strrep(pairs{1,i}, 'V1', '');
-    viz.output_dir = fullfile(resultsdir, pairname);
+    outdir   = fullfile(resultsdir, pairname);
+    if ~isfolder(outdir), mkdir(outdir); end
     
     if exist(tmpdir, 'dir'), rmdir(tmpdir, 's'); end
     mkdir(fullfile(tmpdir, 'V1')); mkdir(fullfile(tmpdir, 'V2'));
@@ -55,10 +70,37 @@ for i = 1:size(pairs, 2)
     copyfile(fullfile(clean_dir, pairs{2,i}), ...
              fullfile(tmpdir, 'V2', pairs{2,i}));
     
-    [PairStats,~,~] = fNIRS_Process(tmpdir, prc);
-    fNIRS_ControlPanel(PairStats, 0, 'auto', viz);
-    writetable(PairStats.table(),fullfile(viz.output_dir,'raw_betas.csv'));
+    [PairStats,~,~] = fNIRS_Process(tmpdir, user_vars);
+    
+    %-- PairStats carries one fitted model per formula, in profile order, so a
+    %   contrast is drawn against the model it names rather than whichever one
+    %   happened to come out first.
+    for m = 1:numel(cfg.pipeline.group.models)
+        modelName = cfg.pipeline.group.models{m}.name;
+        modelCfg  = cfg;
+        modelCfg.visualize.contrasts = contrastsFor(cfg, modelName);
+        if isempty(modelCfg.visualize.contrasts), continue; end
+        
+        viz = prc.toVizParams(modelCfg, PairStats(m), outdir);
+        fNIRS_Visualize(PairStats(m), 0, viz);
+        writetable(PairStats(m).table(), ...
+                   fullfile(outdir, ['raw_betas_' modelName '.csv']));
+    end
 end
 rmdir(tmpdir, 's');
 
-
+%% ========================================================================
+%  Auxilliary Functions
+%  ========================================================================
+function out = contrastsFor(cfg, modelName)
+% The contrasts in this profile that belong to one model. A contrast without a
+% model of its own falls back to visualize.model.
+    out = {};
+    for k = 1:numel(cfg.visualize.contrasts)
+        c = cfg.visualize.contrasts{k};
+        if isfield(c,'model') && ~isempty(c.model), owner = c.model;
+        else,                                      owner = cfg.visualize.model;
+        end
+        if strcmp(owner, modelName), out{end+1} = c; end %#ok<AGROW>
+    end
+end

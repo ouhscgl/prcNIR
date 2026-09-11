@@ -59,6 +59,8 @@ job.ChangeTable = mod_stimTable;
 job = nirs.modules.RenameStims          (job);
 job.listOfChanges = rename_mapping;
 data_raws = job.run(data_raws);
+if contains(user_vars.early_return,'mapped raws')
+    results = data_raws; return; end
 % _________________________________________________________________________
 
 %% ========================================================================
@@ -222,25 +224,9 @@ function data_raws = loadNIRSData(load_path, user_vars)
             % -- load file
             if strcmp(file_type, 'snirf')
                 snirf_files = dir(fullfile(dir_path, '*.snirf'));
-                data = nirs.io.loadSNIRF(...
-                       fullfile(dir_path, snirf_files(1).name));
-                mrk = strrep(fullfile(dir_path, snirf_files(1).name),...
-                             'snirf','csv');
-
-                if isfile(mrk)
-                    marker_table = readtable(mrk, 'VariableNamingRule',...
-                                                  'preserve');
-                    data.stimulus = Dictionary();
-                    
-                    for m = 1:height(marker_table)
-                        stim = nirs.design.StimulusEvents();
-                        stim.name = marker_table.Marker{m};
-                        stim.onset = marker_table.Time(m);
-                        stim.dur = 1;
-                        stim.amp = 1;
-                        data.stimulus(stim.name) = stim;
-                    end
-                end
+                snirf_path  = fullfile(dir_path, snirf_files(1).name);
+                data = nirs.io.loadSNIRF(snirf_path);
+                data = attachMarkersFromCSV(data, snirf_path);
             else
                 data = nirs.io.loadNIRx(dir_path);
             end
@@ -286,6 +272,7 @@ function data_raws = loadNIRSData(load_path, user_vars)
         % -- file is snirf file
         if strcmpi(ext, '.snirf')
             data_raws = nirs.io.loadSNIRF(load_path);
+            data_raws = attachMarkersFromCSV(data_raws, load_path);
         % -- file is NIRx file
         elseif strcmpi(ext, '.wl1')
             [parent_dir, ~, ~] = fileparts(load_path);
@@ -323,7 +310,7 @@ function demographics = extractDemographics(data_p,root_path,folder_struct)
 end
 
 function params       = validateAnalyticParameters(params, defaults)
-    if ~exist('user_vars', 'var') || ~isa(params, 'struct')
+    if nargin < 1 || isempty(params) || ~isa(params, 'struct')
         params = struct();
     end
     field_names = fieldnames(defaults);
@@ -472,6 +459,24 @@ function [stim_table] = stimTableMapper(stim_table, ...
     % Log final stimulus table structure
     disp('Final stimulus table structure:');
     disp(stim_table.Properties.VariableNames);
+end
+
+function data = attachMarkersFromCSV(data, snirf_path)
+    % Attach stimulus from a companion CSV (same basename, .csv) if present.
+    % Extension swap only -- robust to 'snirf' appearing elsewhere in the path.
+    [p, n] = fileparts(snirf_path);
+    mrk = fullfile(p, [n '.csv']);
+    if ~isfile(mrk), return; end          % no CSV -> keep whatever loadSNIRF attached
+    marker_table = readtable(mrk, 'VariableNamingRule', 'preserve');
+    data.stimulus = Dictionary();
+    for m = 1:height(marker_table)
+        stim = nirs.design.StimulusEvents();
+        stim.name  = marker_table.Marker{m};
+        stim.onset = marker_table.Time(m);
+        stim.dur   = 1;
+        stim.amp   = 1;
+        data.stimulus(stim.name) = stim;
+    end
 end
 
 function [data_raws, mod_stimTable, rename_mapping] = ...

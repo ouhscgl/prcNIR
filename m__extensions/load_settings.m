@@ -1,4 +1,13 @@
 function settings = load_settings(json_file)
+% LOAD_SETTINGS - Read an old-style (pre-schema) settings JSON.
+%
+%   Superseded by prc.loadSettings, which reads the versioned profile schema
+%   documented in docs/settings-schema.md, merges it onto prc.defaults and
+%   validates the result. This function is kept because it still reads files
+%   written in the older nir.processing / nir.visualizing / contrasts layout,
+%   and those files are not worth rewriting by hand.
+%
+%   New work should call prc.loadSettings.
 % -- Read JSON file
 fid = fopen(json_file, 'r');
 if fid == -1, error('Could not open JSON file: %s', json_file); end
